@@ -1,0 +1,219 @@
+{
+  "info": {
+    "name": "Patient Management API",
+    "description": "Complete API collection for Patient Management Application",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Authentication",
+      "item": [
+        {
+          "name": "Register User",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"john_doe\",\n  \"email\": \"john@example.com\",\n  \"password\": \"SecurePassword123\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/auth/register",
+              "host": ["{{base_url}}"],
+              "path": ["auth", "register"]
+            }
+          }
+        },
+        {
+          "name": "Login User",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"john@example.com\",\n  \"password\": \"SecurePassword123\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/auth/login",
+              "host": ["{{base_url}}"],
+              "path": ["auth", "login"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Patients",
+      "item": [
+        {
+          "name": "Create Patient",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Alice Smith\",\n  \"age\": 35,\n  \"gender\": \"Female\",\n  \"blood_group\": \"O+\",\n  \"phone\": \"+1-555-123-4567\",\n  \"address\": \"123 Main Street, Springfield, IL 62701\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/patients",
+              "host": ["{{base_url}}"],
+              "path": ["patients"]
+            }
+          }
+        },
+        {
+          "name": "Get All Patients",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/patients",
+              "host": ["{{base_url}}"],
+              "path": ["patients"]
+            }
+          }
+        },
+        {
+          "name": "Get Patient by ID",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/patients/1",
+              "host": ["{{base_url}}"],
+              "path": ["patients", "1"]
+            }
+          }
+        },
+        {
+          "name": "Update Patient",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"age\": 36,\n  \"phone\": \"+1-555-987-6543\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/patients/1",
+              "host": ["{{base_url}}"],
+              "path": ["patients", "1"]
+            }
+          }
+        },
+        {
+          "name": "Upload Patient Image",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": []
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/patients/1/upload-image",
+              "host": ["{{base_url}}"],
+              "path": ["patients", "1", "upload-image"]
+            }
+          }
+        },
+        {
+          "name": "Delete Patient",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/patients/1",
+              "host": ["{{base_url}}"],
+              "path": ["patients", "1"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "Health Check",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "http://localhost:8000/health",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "8000",
+              "path": ["health"]
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8000/api",
+      "type": "string"
+    },
+    {
+      "key": "token",
+      "value": "",
+      "type": "string"
+    }
+  ]
+}
