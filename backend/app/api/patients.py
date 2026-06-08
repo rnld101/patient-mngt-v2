@@ -1,12 +1,4 @@
-from fastapi import (
-    APIRouter,
-    Depends,
-    HTTPException,
-    status,
-    UploadFile,
-    File,
-    Form
-)
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.core.dependencies import get_current_user
@@ -17,13 +9,6 @@ from app.schemas import (
     PatientsListResponse
 )
 from app.services.patient import PatientService
-from app.utils.aws import upload_image_to_s3
-from app.utils.validators import (
-    validate_image_file,
-    validate_image_size,
-    generate_unique_filename
-)
-from app.core.config import settings
 
 router = APIRouter(prefix="/patients", tags=["Patients"])
 
@@ -107,50 +92,3 @@ async def delete_patient(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Patient not found"
         )
-
-
-@router.post("/{patient_id}/upload-image", response_model=PatientResponse)
-async def upload_patient_image(
-    patient_id: int,
-    file: UploadFile = File(...),
-    current_user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Upload a profile image for a patient."""
-    # Validate image file
-    validate_image_file(file)
-    await validate_image_size(file)
-    
-    # Check if patient exists
-    patient = PatientService.get_patient_by_id(db, patient_id, current_user["user_id"])
-    if not patient:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Patient not found"
-        )
-    
-    # Generate unique filename
-    unique_filename = generate_unique_filename(file.filename)
-    
-    # Upload to S3
-    try:
-        s3_url = upload_image_to_s3(
-            file.file,
-            settings.s3_bucket_name,
-            unique_filename
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to upload image: {str(e)}"
-        )
-    
-    # Update patient with image URL
-    updated_patient = PatientService.update_patient_image(
-        db,
-        patient_id,
-        current_user["user_id"],
-        s3_url
-    )
-    
-    return updated_patient

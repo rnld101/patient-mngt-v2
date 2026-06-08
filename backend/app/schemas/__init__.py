@@ -46,7 +46,6 @@ class PatientUpdate(BaseModel):
     blood_group: Optional[str] = Field(None, min_length=1, max_length=10)
     phone: Optional[str] = Field(None, min_length=1, max_length=20)
     address: Optional[str] = Field(None, min_length=1, max_length=500)
-    image_url: Optional[str] = None
 
 
 class PatientResponse(BaseModel):
@@ -57,7 +56,6 @@ class PatientResponse(BaseModel):
     blood_group: str
     phone: str
     address: str
-    image_url: Optional[str]
     user_id: int
     created_at: datetime
 
@@ -68,3 +66,37 @@ class PatientResponse(BaseModel):
 class PatientsListResponse(BaseModel):
     total: int
     patients: list[PatientResponse]
+
+
+# ── Document schemas ──────────────────────────────────────────────────────────
+
+ALLOWED_DOCUMENT_TYPES = {
+    "Prescription",
+    "Blood Report",
+    "X-Ray",
+    "MRI",
+    "CT Scan",
+    "Other",
+}
+
+
+class DocumentResponse(BaseModel):
+    id: int
+    patient_id: int
+    user_id: int
+    document_type: str
+    file_name: str
+    uploaded_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class DocumentListResponse(BaseModel):
+    total: int
+    documents: list[DocumentResponse]
+
+
+class DocumentUrlResponse(BaseModel):
+    url: str
+    expires_in_seconds: int

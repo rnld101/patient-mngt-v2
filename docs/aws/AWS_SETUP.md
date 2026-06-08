@@ -1,313 +1,282 @@
 # AWS Infrastructure Setup Guide
 
-## Prerequisites
-- AWS Account with appropriate permissions
-- AWS CLI installed and configured
-- Three EC2 instances ready (or will be created)
+Complete guide to create every AWS resource this application needs.
+
+**Time required**: ~30–45 minutes  
+**Prerequisites**: AWS account with admin access, AWS CLI installed and configured
 
 ---
 
-## 1. AWS Secrets Manager Setup
+## Overview
 
-### Step 1: Create Secret in AWS Secrets Manager
+You need to create these resources in order:
 
-1. **Login to AWS Console**
-   - Navigate to: https://console.aws.amazon.com
+1. **KMS key** — for S3 encryption
+2. **S3 bucket** — for document storage
+3. **IAM role** — for backend EC2 permissions
+4. **Secrets Manager secret** — for app credentials
+5. **Security groups** — for network access control
 
-2. **Open AWS Secrets Manager**
-   - Search for "Secrets Manager" in the service search
-   - Click "Secrets Manager"
+---
 
-3. **Create New Secret**
-   - Click "Store a new secret"
-   - Choose "Other type of secret"
-   - Under "Key/value pairs", enter the following:
+## Step 1: Create KMS Key (Customer-Managed)
+
+### Via AWS Console
+
+1. Go to **AWS KMS** → **Customer managed keys** → **Create key**
+2. Key type: **Symmetric**
+3. Key usage: **Encrypt and decrypt**
+4. Click **Next**
+5. Add alias: `patient-app-s3-key`
+6. Add tag: `Project` = `patient-management`
+7. Click **Next**
+8. Key administrators: select your IAM user/admin role
+9. Key usage permissions: **leave empty for now** (we'll add the EC2 role later)
+10. Click **Finish**
+
+**Copy the Key ARN** — you'll need it for the IAM policy and S3 bucket.
+
+### Via AWS CLI
+
+```bash
+aws kms create-key \
+  --description "S3 encryption key for Patient Management App" \
+  --tags TagKey=Project,TagValue=patient-management
+
+# Note the KeyId from the output, then create an alias:
+aws kms create-alias \
+  --alias-name alias/patient-app-s3-key \
+  --target-key-id YOUR-KEY-ID
+```
+
+---
+
+## Step 2: Create S3 Bucket
+
+### Via AWS Console
+
+1. Go to **S3** → **Create bucket**
+2. Bucket name: `patient-docs-YOUR-ACCOUNT-ID` *(must be globally unique)*
+3. Region: `us-east-1` *(or your preferred region)*
+4. **Block all public access**: ✅ Enable all four options
+5. **Versioning**: Enable
+6. **Default encryption**:
+   - Encryption type: **SSE-KMS**
+   - KMS key: select the key you just created (`patient-app-s3-key`)
+   - ✅ **Bucket Key**: Enable *(reduces KMS API call costs)*
+7. Click **Create bucket**
+
+### Via AWS CLI
+
+```bash
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+BUCKET_NAME="patient-docs-${ACCOUNT_ID}"
+REGION="us-east-1"
+KMS_KEY_ARN="arn:aws:kms:us-east-1:${ACCOUNT_ID}:key/YOUR-KEY-ID"
+
+# Create bucket
+aws s3api create-bucket \
+  --bucket ${BUCKET_NAME} \
+  --region ${REGION} \
+  --create-bucket-configuration LocationConstraint=${REGION}
+
+# Block all public access
+aws s3api put-public-access-block \
+  --bucket ${BUCKET_NAME} \
+  --public-access-block-configuration \
+    "BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true"
+
+# Enable versioning
+aws s3api put-bucket-versioning \
+  --bucket ${BUCKET_NAME} \
+  --versioning-configuration Status=Enabled
+
+# Set default encryption (SSE-KMS)
+aws s3api put-bucket-encryption \
+  --bucket ${BUCKET_NAME} \
+  --server-side-encryption-configuration '{
+    "Rules": [{
+      "ApplyServerSideEncryptionByDefault": {
+        "SSEAlgorithm": "aws:kms",
+        "KMSMasterKeyID": "'${KMS_KEY_ARN}'"
+      },
+      "BucketKeyEnabled": true
+    }]
+  }'
+
+echo "Bucket created: ${BUCKET_NAME}"
+```
+
+---
+
+## Step 3: Create IAM Role for Backend EC2
+
+### 3a. Create the IAM role
+
+```bash
+# Create role with EC2 trust policy
+aws iam create-role \
+  --role-name PatientManagementAppRole \
+  --assume-role-policy-document '{
+    "Version": "2012-10-17",
+    "Statement": [{
+      "Effect": "Allow",
+      "Principal": {"Service": "ec2.amazonaws.com"},
+      "Action": "sts:AssumeRole"
+    }]
+  }'
+```
+
+### 3b. Create and attach Policy 1 — Secrets Manager
+
+```bash
+aws iam create-policy \
+  --policy-name PatientAppSecretsManagerPolicy \
+  --policy-document '{
+    "Version": "2012-10-17",
+    "Statement": [{
+      "Effect": "Allow",
+      "Action": ["secretsmanager:GetSecretValue"],
+      "Resource": "arn:aws:secretsmanager:us-east-1:ACCOUNT-ID:secret:patient-management-secrets*"
+    }]
+  }'
+
+aws iam attach-role-policy \
+  --role-name PatientManagementAppRole \
+  --policy-arn arn:aws:iam::ACCOUNT-ID:policy/PatientAppSecretsManagerPolicy
+```
+
+### 3c. Create and attach Policy 2 — S3
+
+```bash
+aws iam create-policy \
+  --policy-name PatientAppS3Policy \
+  --policy-document '{
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Action": ["s3:PutObject", "s3:GetObject", "s3:DeleteObject"],
+        "Resource": "arn:aws:s3:::patient-docs-ACCOUNT-ID/*"
+      },
+      {
+        "Effect": "Allow",
+        "Action": ["s3:ListBucket"],
+        "Resource": "arn:aws:s3:::patient-docs-ACCOUNT-ID"
+      }
+    ]
+  }'
+
+aws iam attach-role-policy \
+  --role-name PatientManagementAppRole \
+  --policy-arn arn:aws:iam::ACCOUNT-ID:policy/PatientAppS3Policy
+```
+
+> **Note**: `s3:GetObject` is required for pre-signed URL generation (even on private buckets). `s3:DeleteObject` is required for document deletion.
+
+### 3d. Create and attach Policy 3 — KMS
+
+```bash
+aws iam create-policy \
+  --policy-name PatientAppKMSPolicy \
+  --policy-document '{
+    "Version": "2012-10-17",
+    "Statement": [{
+      "Effect": "Allow",
+      "Action": ["kms:Decrypt", "kms:GenerateDataKey", "kms:DescribeKey"],
+      "Resource": "arn:aws:kms:us-east-1:ACCOUNT-ID:key/YOUR-KEY-ID"
+    }]
+  }'
+
+aws iam attach-role-policy \
+  --role-name PatientManagementAppRole \
+  --policy-arn arn:aws:iam::ACCOUNT-ID:policy/PatientAppKMSPolicy
+```
+
+### 3e. Create instance profile (required for EC2)
+
+```bash
+aws iam create-instance-profile \
+  --instance-profile-name PatientManagementAppRole
+
+aws iam add-role-to-instance-profile \
+  --instance-profile-name PatientManagementAppRole \
+  --role-name PatientManagementAppRole
+```
+
+### 3f. Grant KMS role access to the key
+
+Go back to **KMS** → select your key → **Key policy** → Edit.
+
+Under `"Statement"`, add this block:
 
 ```json
 {
-  "db_host": "your-database-private-ip",
-  "db_name": "patient_db",
-  "db_user": "patient_app",
-  "db_password": "your-secure-password",
-  "jwt_secret": "your-jwt-secret-key-change-this",
-  "s3_bucket_name": "patient-images-bucket-your-account-id",
-  "aws_region": "us-east-1"
+  "Sid": "AllowEC2RoleToUseKey",
+  "Effect": "Allow",
+  "Principal": {
+    "AWS": "arn:aws:iam::ACCOUNT-ID:role/PatientManagementAppRole"
+  },
+  "Action": ["kms:Decrypt", "kms:GenerateDataKey", "kms:DescribeKey"],
+  "Resource": "*"
 }
 ```
 
-4. **Configure Secret**
-   - Secret name: `patient-management-secrets`
-   - Description: "Secrets for Patient Management Application"
-   - Click "Next"
-
-5. **Configure rotation**
-   - Choose "Disable automatic rotation"
-   - Click "Next"
-
-6. **Review and Create**
-   - Click "Store secret"
-
-**Note the Secret ARN** - You'll need this later.
-
 ---
 
-## 2. S3 Bucket Setup
+## Step 4: Create Secrets Manager Secret
 
-### Step 1: Create S3 Bucket
+**Important**: Create this secret after you know the database private IP (from Part 1 of the deployment guide).
 
-1. **Open S3 Console**
-   - Navigate to S3 service
-   - Click "Create bucket"
+### Via Console
 
-2. **Configure Bucket**
-   - Bucket name: `patient-images-bucket-your-account-id`
-   - Region: Select your region (e.g., us-east-1)
-   - Leave ACL settings as default
-   - Click "Create bucket"
+1. Go to **Secrets Manager** → **Store a new secret**
+2. Secret type: **Other type of secret**
+3. Key/value pairs — enter these:
 
-### Step 2: Block Public Access
+| Key | Value |
+|---|---|
+| `db_host` | Private IP of your database EC2 |
+| `db_name` | `patient_db` |
+| `db_user` | `patient_app` |
+| `db_password` | The password you set when creating MySQL user |
+| `jwt_secret` | A random 64-character string (see command below) |
+| `s3_bucket_name` | `patient-docs-YOUR-ACCOUNT-ID` |
+| `aws_region` | `us-east-1` |
 
-1. **Select your bucket**
-2. **Go to "Permissions" tab**
-3. **Click "Edit" under "Block public access"**
-4. **Enable all four options:**
-   - Block all public access
-   - Click "Save changes"
+4. Secret name: `patient-management-secrets`
+5. Description: `Credentials for Patient Management Application`
+6. Rotation: **Disable** (for now)
+7. Click **Store**
 
-### Step 3: Enable Versioning
+### Generate a strong JWT secret
 
-1. **Go to "Properties" tab**
-2. **Click "Edit" under "Versioning"**
-3. **Select "Enable"**
-4. **Click "Save changes"**
-
-### Step 4: Enable Default Encryption (SSE-KMS)
-
-1. **Go to "Properties" tab**
-2. **Scroll to "Default encryption"**
-3. **Click "Edit"**
-
-4. **Configure Encryption:**
-   - Choose "Server-side encryption with AWS KMS"
-   - If you don't have a customer-managed key, create one first (see step below)
-   - Select your KMS key
-   - Click "Save changes"
-
-### Create Customer-Managed KMS Key (Optional but Recommended)
-
-1. **Go to AWS KMS Console**
-2. **Click "Create key"**
-3. **Configure Key:**
-   - Key type: "Symmetric"
-   - Key usage: "Encrypt and decrypt"
-   - Click "Next"
-
-4. **Add Tags:**
-   - Key: `Environment`, Value: `Production`
-   - Click "Next"
-
-5. **Define Key Administrative Permissions:**
-   - Select your AWS account or specific admin users
-   - Click "Next"
-
-6. **Define Key Usage Permissions:**
-   - Select the IAM role created in step 3 (see below)
-   - This allows EC2 instances to use the key
-   - Click "Next"
-
-7. **Review and Create:**
-   - Click "Finish"
-   - **Note the Key ID** - You'll need this for IAM policy
-
----
-
-## 3. IAM Role Setup
-
-### Step 1: Create IAM Role for EC2
-
-1. **Go to IAM Console**
-2. **Click "Roles"**
-3. **Click "Create role"**
-
-4. **Select Entity Type:**
-   - Choose "EC2"
-   - Click "Next"
-
-### Step 2: Add Permissions
-
-1. **Create Custom Policy for Secrets Manager:**
-   - Click "Create policy"
-   - Choose "JSON" tab
-   - Paste this policy:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": [
-        "secretsmanager:GetSecretValue"
-      ],
-      "Resource": "arn:aws:secretsmanager:us-east-1:YOUR-ACCOUNT-ID:secret:patient-management-secrets*"
-    }
-  ]
-}
+```bash
+# Generate a random 64-character JWT secret
+python3 -c "import secrets; print(secrets.token_hex(32))"
+# or
+openssl rand -hex 32
 ```
 
-   - Click "Next"
-   - Name: `PatientAppSecretsManagerPolicy`
-   - Click "Create policy"
+### Via AWS CLI
 
-2. **Create Custom Policy for S3:**
-   - Click "Create policy"
-   - Choose "JSON" tab
-   - Paste this policy:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": [
-        "s3:PutObject",
-        "s3:GetObject",
-        "s3:DeleteObject"
-      ],
-      "Resource": "arn:aws:s3:::patient-images-bucket-your-account-id/*"
-    },
-    {
-      "Effect": "Allow",
-      "Action": [
-        "s3:ListBucket"
-      ],
-      "Resource": "arn:aws:s3:::patient-images-bucket-your-account-id"
-    }
-  ]
-}
-```
-
-   - Click "Next"
-   - Name: `PatientAppS3Policy`
-   - Click "Create policy"
-
-3. **Create Custom Policy for KMS (If using customer-managed key):**
-   - Click "Create policy"
-   - Choose "JSON" tab
-   - Paste this policy:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": [
-        "kms:Decrypt",
-        "kms:GenerateDataKey",
-        "kms:DescribeKey"
-      ],
-      "Resource": "arn:aws:kms:us-east-1:YOUR-ACCOUNT-ID:key/YOUR-KEY-ID"
-    }
-  ]
-}
-```
-
-   - Replace `YOUR-KEY-ID` with your KMS key ID
-   - Click "Next"
-   - Name: `PatientAppKMSPolicy`
-   - Click "Create policy"
-
-### Step 3: Attach Policies to Role
-
-1. **Go back to "Create role" page**
-2. **Refresh and filter for the policies you created:**
-   - `PatientAppSecretsManagerPolicy`
-   - `PatientAppS3Policy`
-   - `PatientAppKMSPolicy` (if created)
-3. **Check all three policies**
-4. **Click "Next"**
-5. **Name the role:** `PatientManagementAppRole`
-6. **Click "Create role"**
-
-### Step 4: Attach Role to EC2 Instance
-
-This will be done during EC2 setup (see deployment guide).
-
----
-
-## 4. Additional AWS Configurations
-
-### Create EC2 Security Groups
-
-#### Backend Security Group
-
-```
-Name: patient-app-backend-sg
-Inbound Rules:
-  - Port 22 (SSH) - From: Your IP
-  - Port 8000 (FastAPI) - From: Frontend SG or 0.0.0.0/0
-  - Port 80 (HTTP) - From: 0.0.0.0/0
-  - Port 443 (HTTPS) - From: 0.0.0.0/0
-Outbound Rules:
-  - All traffic
-```
-
-#### Database Security Group
-
-```
-Name: patient-app-db-sg
-Inbound Rules:
-  - Port 22 (SSH) - From: Your IP
-  - Port 3306 (MySQL) - From: Backend SG
-Outbound Rules:
-  - All traffic
-```
-
-#### Frontend Security Group
-
-```
-Name: patient-app-frontend-sg
-Inbound Rules:
-  - Port 22 (SSH) - From: Your IP
-  - Port 80 (HTTP) - From: 0.0.0.0/0
-  - Port 443 (HTTPS) - From: 0.0.0.0/0
-Outbound Rules:
-  - All traffic
-```
-
----
-
-## 5. Important Notes
-
-### Environment Variables
-- The application loads secrets from AWS Secrets Manager at startup
-- The Backend container/instance must have the IAM role attached
-- No hardcoded credentials should be in code
-
-### S3 Encryption
-- The bucket has default encryption enabled (SSE-KMS)
-- The application does NOT specify KMS key IDs in code
-- S3 automatically handles encryption when files are uploaded
-- The backend only needs s3:PutObject permission
-
-### Database
-- Database must be accessible from backend instance
-- Use security groups to restrict MySQL traffic to only backend instances
-
----
-
-## AWS CLI Commands (Optional)
-
-### Create Secrets Manager Secret
 ```bash
 aws secretsmanager create-secret \
   --name patient-management-secrets \
-  --secret-string '{"db_host":"your-ip","db_name":"patient_db","db_user":"patient_app","db_password":"password","jwt_secret":"secret","s3_bucket_name":"bucket-name","aws_region":"us-east-1"}'
+  --description "Credentials for Patient Management Application" \
+  --secret-string '{
+    "db_host": "DB-PRIVATE-IP",
+    "db_name": "patient_db",
+    "db_user": "patient_app",
+    "db_password": "YOUR-DB-PASSWORD",
+    "jwt_secret": "YOUR-64-CHAR-RANDOM-STRING",
+    "s3_bucket_name": "patient-docs-YOUR-ACCOUNT-ID",
+    "aws_region": "us-east-1"
+  }'
 ```
 
-### Get Secret Value
+### Verify the secret
+
 ```bash
 aws secretsmanager get-secret-value \
   --secret-id patient-management-secrets \
@@ -315,25 +284,114 @@ aws secretsmanager get-secret-value \
   --output text
 ```
 
-### Create S3 Bucket
-```bash
-aws s3 mb s3://patient-images-bucket-your-account-id --region us-east-1
-```
+---
 
-### Block Public Access
+## Step 5: Create Security Groups
+
+Run these from AWS CLI (replace `VPC-ID` with your VPC ID):
+
 ```bash
-aws s3api put-public-access-block \
-  --bucket patient-images-bucket-your-account-id \
-  --public-access-block-configuration "BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true"
+VPC_ID="vpc-xxxxxxxxx"   # your default or custom VPC
+
+# ── Backend security group ──────────────────────────────
+aws ec2 create-security-group \
+  --group-name patient-app-backend-sg \
+  --description "Backend EC2 for Patient Management App" \
+  --vpc-id ${VPC_ID}
+
+BACKEND_SG_ID=$(aws ec2 describe-security-groups \
+  --filters Name=group-name,Values=patient-app-backend-sg \
+  --query 'SecurityGroups[0].GroupId' --output text)
+
+# Allow SSH from your IP
+aws ec2 authorize-security-group-ingress \
+  --group-id ${BACKEND_SG_ID} \
+  --protocol tcp --port 22 --cidr YOUR.IP.ADDRESS/32
+
+# Allow HTTP from anywhere
+aws ec2 authorize-security-group-ingress \
+  --group-id ${BACKEND_SG_ID} \
+  --protocol tcp --port 80 --cidr 0.0.0.0/0
+
+# ── Database security group ──────────────────────────────
+aws ec2 create-security-group \
+  --group-name patient-app-db-sg \
+  --description "Database EC2 for Patient Management App" \
+  --vpc-id ${VPC_ID}
+
+DB_SG_ID=$(aws ec2 describe-security-groups \
+  --filters Name=group-name,Values=patient-app-db-sg \
+  --query 'SecurityGroups[0].GroupId' --output text)
+
+# Allow SSH from your IP
+aws ec2 authorize-security-group-ingress \
+  --group-id ${DB_SG_ID} \
+  --protocol tcp --port 22 --cidr YOUR.IP.ADDRESS/32
+
+# Allow MySQL from backend security group only
+aws ec2 authorize-security-group-ingress \
+  --group-id ${DB_SG_ID} \
+  --protocol tcp --port 3306 \
+  --source-group ${BACKEND_SG_ID}
+
+# ── Frontend security group ──────────────────────────────
+aws ec2 create-security-group \
+  --group-name patient-app-frontend-sg \
+  --description "Frontend EC2 for Patient Management App" \
+  --vpc-id ${VPC_ID}
+
+FRONTEND_SG_ID=$(aws ec2 describe-security-groups \
+  --filters Name=group-name,Values=patient-app-frontend-sg \
+  --query 'SecurityGroups[0].GroupId' --output text)
+
+aws ec2 authorize-security-group-ingress \
+  --group-id ${FRONTEND_SG_ID} \
+  --protocol tcp --port 22 --cidr YOUR.IP.ADDRESS/32
+
+aws ec2 authorize-security-group-ingress \
+  --group-id ${FRONTEND_SG_ID} \
+  --protocol tcp --port 80 --cidr 0.0.0.0/0
 ```
 
 ---
 
-## Next Steps
+## Verify Everything
 
-1. Create the EC2 instances
-2. Configure security groups
-3. Install and configure MySQL on database instance
-4. Install Python 3.13 and dependencies on backend instance
-5. Install Node.js and build frontend on frontend instance
-6. See [Deployment Guide](./DEPLOYMENT.md) for complete steps
+```bash
+# Check secret exists and is readable
+aws secretsmanager get-secret-value \
+  --secret-id patient-management-secrets \
+  --query SecretString --output text
+
+# Check bucket exists and is private
+aws s3api get-public-access-block --bucket patient-docs-ACCOUNT-ID
+
+# Check bucket encryption
+aws s3api get-bucket-encryption --bucket patient-docs-ACCOUNT-ID
+
+# Check IAM role exists with policies
+aws iam list-attached-role-policies --role-name PatientManagementAppRole
+
+# List KMS keys
+aws kms list-aliases | grep patient
+```
+
+---
+
+## Summary of Resources Created
+
+| Resource | Name / ID |
+|---|---|
+| KMS key | `alias/patient-app-s3-key` |
+| S3 bucket | `patient-docs-<account-id>` |
+| IAM role | `PatientManagementAppRole` |
+| IAM instance profile | `PatientManagementAppRole` |
+| IAM policies | `PatientAppSecretsManagerPolicy`, `PatientAppS3Policy`, `PatientAppKMSPolicy` |
+| Secret | `patient-management-secrets` |
+| Security groups | `patient-app-backend-sg`, `patient-app-db-sg`, `patient-app-frontend-sg` |
+
+All of the above are ready to be referenced in the deployment guide and later in Terraform.
+
+---
+
+**Next step**: See `docs/deployment/DEPLOYMENT.md` to launch EC2 instances and deploy the application.

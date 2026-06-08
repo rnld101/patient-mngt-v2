@@ -15,9 +15,7 @@ export const EditPatientPage = () => {
     blood_group: '',
     phone: '',
     address: '',
-    image_url: '',
   })
-  const [image, setImage] = useState(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -30,7 +28,8 @@ export const EditPatientPage = () => {
     try {
       setLoading(true)
       const response = await patientService.getPatientById(id)
-      setFormData(response.data)
+      const { name, age, gender, blood_group, phone, address } = response.data
+      setFormData({ name, age, gender, blood_group, phone, address })
     } catch (err) {
       setError('Failed to load patient')
     } finally {
@@ -44,13 +43,6 @@ export const EditPatientPage = () => {
       ...prev,
       [name]: value
     }))
-  }
-
-  const handleImageChange = (e) => {
-    const file = e.target.files?.[0]
-    if (file) {
-      setImage(file)
-    }
   }
 
   const handleSubmit = async (e) => {
@@ -69,16 +61,6 @@ export const EditPatientPage = () => {
       }
 
       await patientService.updatePatient(id, updateData)
-
-      // Upload new image if provided
-      if (image) {
-        try {
-          await patientService.uploadPatientImage(id, image)
-        } catch (imgError) {
-          console.warn('Image upload failed:', imgError)
-        }
-      }
-
       navigate('/patients')
     } catch (err) {
       setError(getErrorMessage(err))
@@ -226,24 +208,6 @@ export const EditPatientPage = () => {
                   required
                   className="mt-1 w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 />
-              </div>
-
-              <div>
-                <label htmlFor="image" className="block text-sm font-medium text-gray-700">
-                  Change Profile Picture
-                </label>
-                <input
-                  id="image"
-                  name="image"
-                  type="file"
-                  accept="image/*"
-                  onChange={handleImageChange}
-                  className="mt-1 w-full px-4 py-2 border border-gray-300 rounded-lg"
-                />
-                {image && <p className="text-sm text-gray-600 mt-1">New: {image.name}</p>}
-                {formData.image_url && !image && (
-                  <p className="text-sm text-gray-600 mt-1">Current image: {formData.image_url}</p>
-                )}
               </div>
             </div>
 

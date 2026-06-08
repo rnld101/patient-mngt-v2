@@ -7,6 +7,7 @@ import { DashboardPage } from './pages/DashboardPage'
 import { PatientsPage } from './pages/PatientsPage'
 import { AddPatientPage } from './pages/AddPatientPage'
 import { EditPatientPage } from './pages/EditPatientPage'
+import { PatientDocumentsPage } from './pages/PatientDocumentsPage'
 
 function App() {
   return (
@@ -48,6 +49,15 @@ function App() {
             element={
               <PrivateRoute>
                 <EditPatientPage />
+              </PrivateRoute>
+            }
+          />
+          
+          <Route
+            path="/patients/:id/documents"
+            element={
+              <PrivateRoute>
+                <PatientDocumentsPage />
               </PrivateRoute>
             }
           />

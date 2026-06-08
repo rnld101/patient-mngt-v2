@@ -20,14 +20,5 @@ export const patientService = {
   deletePatient: (id) => {
     return api.delete(`/patients/${id}`)
   },
-
-  uploadPatientImage: (patientId, file) => {
-    const formData = new FormData()
-    formData.append('file', file)
-    return api.post(`/patients/${patientId}/upload-image`, formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data',
-      },
-    })
-  },
 }
+

@@ -109,8 +109,7 @@ export const PatientsPage = () => {
               <table className="min-w-full bg-white border border-gray-200">
                 <thead className="bg-gray-50">
                   <tr>
-                    <th className="px-6 py-3 border-b text-left text-sm font-semibold text-gray-900">Photo</th>
-                    <th className="px-6 py-3 border-b text-left text-sm font-semibold text-gray-900">Name</th>
+                    <th className="px-6 py-3 border-b text-left text-sm font-semibold text-gray-900">Patient</th>
                     <th className="px-6 py-3 border-b text-left text-sm font-semibold text-gray-900">Age</th>
                     <th className="px-6 py-3 border-b text-left text-sm font-semibold text-gray-900">Gender</th>
                     <th className="px-6 py-3 border-b text-left text-sm font-semibold text-gray-900">Blood Group</th>
@@ -122,31 +121,32 @@ export const PatientsPage = () => {
                   {patients.map((patient) => (
                     <tr key={patient.id} className="hover:bg-gray-50 border-b">
                       <td className="px-6 py-3">
-                        {patient.image_url ? (
-                          <img
-                            src={patient.image_url}
-                            alt={patient.name}
-                            className="w-10 h-10 rounded-full object-cover"
-                          />
-                        ) : (
-                          <div className="w-10 h-10 rounded-full bg-gray-300 flex items-center justify-center">
-                            <span className="text-gray-600 font-semibold">
+                        <div className="flex items-center gap-3">
+                          {/* Initials avatar */}
+                          <div className="w-9 h-9 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
+                            <span className="text-blue-700 font-semibold text-sm">
                               {patient.name.charAt(0).toUpperCase()}
                             </span>
                           </div>
-                        )}
+                          <span className="text-sm text-gray-900 font-medium">{patient.name}</span>
+                        </div>
                       </td>
-                      <td className="px-6 py-3 text-sm text-gray-900 font-medium">{patient.name}</td>
                       <td className="px-6 py-3 text-sm text-gray-600">{patient.age}</td>
                       <td className="px-6 py-3 text-sm text-gray-600">{patient.gender}</td>
                       <td className="px-6 py-3 text-sm text-gray-600">{patient.blood_group}</td>
                       <td className="px-6 py-3 text-sm text-gray-600">{patient.phone}</td>
-                      <td className="px-6 py-3 text-sm space-x-2">
+                      <td className="px-6 py-3 text-sm space-x-3">
                         <Link
                           to={`/patients/${patient.id}/edit`}
                           className="text-blue-600 hover:underline"
                         >
                           Edit
+                        </Link>
+                        <Link
+                          to={`/patients/${patient.id}/documents`}
+                          className="text-green-600 hover:underline"
+                        >
+                          Documents
                         </Link>
                         <button
                           onClick={() => handleDelete(patient.id)}

@@ -15,7 +15,6 @@ export const AddPatientPage = () => {
     phone: '',
     address: '',
   })
-  const [image, setImage] = useState(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
@@ -27,37 +26,18 @@ export const AddPatientPage = () => {
     }))
   }
 
-  const handleImageChange = (e) => {
-    const file = e.target.files?.[0]
-    if (file) {
-      setImage(file)
-    }
-  }
-
   const handleSubmit = async (e) => {
     e.preventDefault()
     setError('')
     setLoading(true)
 
     try {
-      // Convert age to integer
       const patientData = {
         ...formData,
         age: parseInt(formData.age),
       }
 
-      const response = await patientService.createPatient(patientData)
-      
-      // Upload image if provided
-      if (image) {
-        try {
-          await patientService.uploadPatientImage(response.data.id, image)
-        } catch (imgError) {
-          console.warn('Image upload failed:', imgError)
-          // Continue even if image upload fails
-        }
-      }
-
+      await patientService.createPatient(patientData)
       navigate('/patients')
     } catch (err) {
       setError(getErrorMessage(err))
@@ -202,21 +182,6 @@ export const AddPatientPage = () => {
                   className="mt-1 w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   placeholder="+1 (555) 123-4567"
                 />
-              </div>
-
-              <div>
-                <label htmlFor="image" className="block text-sm font-medium text-gray-700">
-                  Profile Picture
-                </label>
-                <input
-                  id="image"
-                  name="image"
-                  type="file"
-                  accept="image/*"
-                  onChange={handleImageChange}
-                  className="mt-1 w-full px-4 py-2 border border-gray-300 rounded-lg"
-                />
-                {image && <p className="text-sm text-gray-600 mt-1">{image.name}</p>}
               </div>
             </div>
 

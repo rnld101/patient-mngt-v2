@@ -1,528 +1,272 @@
-# AWS Architecture Documentation
-
-## Overview
-
-This document provides a detailed technical reference for the AWS infrastructure used to deploy the Patient Management Application.
-
----
+# AWS Architecture Reference
 
 ## Architecture Diagram
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        Internet                                  │
-└────────────────────────┬────────────────────────────────────────┘
-                         │
-                    ┌────▼─────┐
-                    │   Route53 │ (Optional - for DNS)
-                    └────┬─────┘
-                         │
-        ┌────────────────┼────────────────┐
-        │                │                │
-   ┌────▼────┐  ┌───────▼──────┐  ┌──────▼─────┐
-   │Frontend  │  │  Nginx ALB   │  │  S3 Bucket │
-   │EC2       │  │ (Optional)   │  │  + KMS     │
-   │(React)   │  └───────┬──────┘  └────────────┘
-   └────┬─────┘          │
-        │         ┌──────▼─────────┐
-        └────────►│  Backend EC2   │
-                  │  (FastAPI)     │
-                  └──────┬─────────┘
-                         │
-                  ┌──────▼─────────┐
-                  │  Database EC2  │
-                  │  (MySQL 8)     │
-                  └────────────────┘
-        
-        ┌─────────────────────────────┐
-        │  AWS Secrets Manager        │
-        │ (Credentials & JWT Secret)  │
-        └─────────────────────────────┘
-        
-        ┌─────────────────────────────┐
-        │  AWS KMS                    │
-        │ (S3 Encryption Key)         │
-        └─────────────────────────────┘
-        
-        ┌─────────────────────────────┐
-        │  IAM Roles                  │
-        │ (EC2 Instance Profiles)     │
-        └─────────────────────────────┘
+                    ┌──────────────────────────────────┐
+                    │            Internet               │
+                    └──────────────┬───────────────────┘
+                                   │
+                    ┌──────────────▼───────────────────┐
+                    │       Frontend EC2 (Nginx)        │
+                    │         React SPA (Vite)          │
+                    │        t3.small — port 80         │
+                    └──────────────┬───────────────────┘
+                                   │ HTTP (Axios + JWT)
+                    ┌──────────────▼───────────────────┐
+                    │       Backend EC2 (Nginx)         │
+                    │  FastAPI + Gunicorn — port 8000   │
+                    │          t3.medium                │
+                    │   IAM Role: PatientAppRole        │
+                    └──────┬───────────┬───────────────┘
+                           │           │
+          ┌────────────────▼──┐   ┌────▼──────────────────────┐
+          │    Database EC2   │   │         AWS S3             │
+          │   MySQL 8.0       │   │   patient-documents/       │
+          │   t3.small:3306   │   │   Private — SSE-KMS        │
+          └───────────────────┘   └────────────────────────────┘
+
+  ┌──────────────────────────┐    ┌──────────────────────────┐
+  │   AWS Secrets Manager    │    │        AWS KMS            │
+  │  patient-management-     │    │  Customer-managed key     │
+  │  secrets                 │    │  (S3 encryption)         │
+  └──────────────────────────┘    └──────────────────────────┘
+
+  ┌──────────────────────────┐
+  │       IAM Role           │
+  │  PatientManagementAppRole│
+  │  Attached to backend EC2 │
+  └──────────────────────────┘
 ```
 
 ---
 
-## AWS Service Details
+## EC2 Instances
 
-### 1. EC2 Instances
+| Instance | Type | RAM | Storage | Role |
+|---|---|---|---|---|
+| Database | t3.small | 2 GB | 20 GB GP3 | MySQL 8.0 |
+| Backend | t3.medium | 4 GB | 30 GB GP3 | FastAPI + Gunicorn + Nginx |
+| Frontend | t3.small | 2 GB | 20 GB GP3 | React build served via Nginx |
 
-#### Frontend Instance
-- **Instance Type**: t3.small
-- **vCPU**: 2
-- **Memory**: 2 GB
-- **Storage**: 20 GB EBS GP3
-- **OS**: Ubuntu 22.04 LTS
-- **Applications**: Node.js, React, Nginx
-- **Port**: 80 (HTTP), 443 (HTTPS)
-- **IAM Role**: None required (static content only)
+All instances run **Ubuntu 22.04 LTS**.
 
-#### Backend Instance
-- **Instance Type**: t3.medium
-- **vCPU**: 2
-- **Memory**: 4 GB
-- **Storage**: 30 GB EBS GP3
-- **OS**: Ubuntu 22.04 LTS
-- **Applications**: Python 3.13, FastAPI, Gunicorn, Nginx
-- **Port**: 8000 (FastAPI), 80 (Nginx), 443 (HTTPS)
-- **IAM Role**: PatientManagementAppRole
-- **Required Permissions**: S3, Secrets Manager, KMS
+The **backend instance** must have the `PatientManagementAppRole` IAM role attached.  
+The **database** and **frontend** instances require no IAM role.
 
-#### Database Instance
-- **Instance Type**: t3.small
-- **vCPU**: 2
-- **Memory**: 2 GB
-- **Storage**: 20 GB EBS GP3
-- **OS**: Ubuntu 22.04 LTS
-- **Applications**: MySQL 8
-- **Port**: 3306 (MySQL)
-- **IAM Role**: None required
-- **Networking**: Private subnet recommended
+---
 
-### 2. AWS Secrets Manager
+## AWS Secrets Manager
 
-**Secret Name**: `patient-management-secrets`
+**Secret name**: `patient-management-secrets`
 
-**Secret Contents**:
 ```json
 {
-  "db_host": "10.0.2.50",
-  "db_name": "patient_db",
-  "db_user": "patient_app",
-  "db_password": "xxxxxxxxxx",
-  "jwt_secret": "xxxxxxxxxx",
-  "s3_bucket_name": "patient-images-bucket-1234567890",
-  "aws_region": "us-east-1"
+  "db_host":       "10.0.x.x",
+  "db_name":       "patient_db",
+  "db_user":       "patient_app",
+  "db_password":   "<strong-password>",
+  "jwt_secret":    "<random-64-char-string>",
+  "s3_bucket_name": "patient-docs-<account-id>",
+  "aws_region":    "us-east-1"
 }
 ```
 
-**Access Pattern**:
-- Backend EC2 retrieves secret on startup
-- Secret ARN: `arn:aws:secretsmanager:us-east-1:ACCOUNT-ID:secret:patient-management-secrets`
+The backend loads this secret **at startup** via `boto3`. No credentials are stored in code or environment files.
 
-### 3. S3 Bucket
+---
 
-**Bucket Configuration**:
-- **Name**: `patient-images-bucket-ACCOUNT-ID`
-- **Region**: us-east-1
-- **Versioning**: Enabled
-- **Encryption**: SSE-KMS (customer-managed key)
-- **Public Access**: Blocked
-- **Lifecycle**: Optional - delete old versions after 30 days
+## S3 Bucket
 
-**Bucket Contents**:
-```
-patient-images-bucket/
-└── patient_images/
-    ├── uuid-1.jpg
-    ├── uuid-2.png
-    └── uuid-3.gif
-```
+| Setting | Value |
+|---|---|
+| Name | `patient-docs-<account-id>` |
+| Region | us-east-1 (or your chosen region) |
+| Public access | ❌ Blocked completely |
+| Encryption | SSE-KMS (customer-managed key) |
+| Versioning | Enabled (recommended) |
+| Object prefix | `patient_documents/<uuid>.<ext>` |
 
-**Permissions**:
-- Backend EC2 can: `s3:PutObject`, `s3:GetObject`, `s3:DeleteObject`
-- Backend EC2 can list: `s3:ListBucket`
+Documents are **never served from a public URL**. The backend generates a **pre-signed URL** valid for 1 hour on demand.
 
-### 4. AWS KMS
+---
 
-**Key Policy**:
-- **Usage**: Encrypt/Decrypt S3 objects
-- **Type**: Customer-managed key
-- **Rotation**: Automatic (optional)
-- **Access**: Granted to Backend EC2 via IAM role
+## IAM Role: `PatientManagementAppRole`
 
-**Key ARN**: `arn:aws:kms:us-east-1:ACCOUNT-ID:key/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`
+Attach this role to the **backend EC2 instance profile**.
 
-**Key Policy** (Example):
+### Policy 1 — Secrets Manager
+
 ```json
 {
-  "Sid": "Enable Backend EC2 to use the key",
-  "Effect": "Allow",
-  "Principal": {
-    "AWS": "arn:aws:iam::ACCOUNT-ID:role/PatientManagementAppRole"
-  },
-  "Action": [
-    "kms:Decrypt",
-    "kms:GenerateDataKey",
-    "kms:DescribeKey"
-  ],
-  "Resource": "*"
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": ["secretsmanager:GetSecretValue"],
+    "Resource": "arn:aws:secretsmanager:us-east-1:ACCOUNT-ID:secret:patient-management-secrets*"
+  }]
 }
 ```
 
-### 5. IAM Roles and Policies
+### Policy 2 — S3
 
-#### PatientManagementAppRole
-
-**Attached Policies**:
-1. PatientAppSecretsManagerPolicy
-2. PatientAppS3Policy
-3. PatientAppKMSPolicy
-
-**Policy 1: Secrets Manager**
 ```json
 {
   "Version": "2012-10-17",
   "Statement": [
     {
       "Effect": "Allow",
-      "Action": ["secretsmanager:GetSecretValue"],
-      "Resource": "arn:aws:secretsmanager:us-east-1:ACCOUNT-ID:secret:patient-management-secrets*"
-    }
-  ]
-}
-```
-
-**Policy 2: S3**
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": [
-        "s3:PutObject",
-        "s3:GetObject",
-        "s3:DeleteObject"
-      ],
-      "Resource": "arn:aws:s3:::patient-images-bucket-ACCOUNT-ID/*"
+      "Action": ["s3:PutObject", "s3:GetObject", "s3:DeleteObject"],
+      "Resource": "arn:aws:s3:::patient-docs-ACCOUNT-ID/*"
     },
     {
       "Effect": "Allow",
       "Action": ["s3:ListBucket"],
-      "Resource": "arn:aws:s3:::patient-images-bucket-ACCOUNT-ID"
+      "Resource": "arn:aws:s3:::patient-docs-ACCOUNT-ID"
     }
   ]
 }
 ```
 
-**Policy 3: KMS**
+> **Important**: `s3:GetObject` is required for pre-signed URL generation even on private buckets.  
+> `s3:DeleteObject` is required for document deletion.
+
+### Policy 3 — KMS
+
 ```json
 {
   "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": [
-        "kms:Decrypt",
-        "kms:GenerateDataKey",
-        "kms:DescribeKey"
-      ],
-      "Resource": "arn:aws:kms:us-east-1:ACCOUNT-ID:key/KEY-ID"
-    }
-  ]
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": ["kms:Decrypt", "kms:GenerateDataKey", "kms:DescribeKey"],
+    "Resource": "arn:aws:kms:us-east-1:ACCOUNT-ID:key/KEY-ID"
+  }]
 }
 ```
 
-### 6. Security Groups
+---
 
-#### Frontend Security Group (patient-app-frontend-sg)
+## Security Groups
 
-| Port | Protocol | Source | Purpose |
-|------|----------|--------|---------|
-| 80 | TCP | 0.0.0.0/0 | HTTP |
-| 443 | TCP | 0.0.0.0/0 | HTTPS |
-| 22 | TCP | [Your IP] | SSH |
+### `patient-app-backend-sg` (Backend EC2)
 
-#### Backend Security Group (patient-app-backend-sg)
+| Direction | Port | Protocol | Source | Purpose |
+|---|---|---|---|---|
+| Inbound | 22 | TCP | Your IP only | SSH |
+| Inbound | 80 | TCP | 0.0.0.0/0 | HTTP (Nginx) |
+| Inbound | 443 | TCP | 0.0.0.0/0 | HTTPS (optional) |
+| Outbound | All | All | 0.0.0.0/0 | Allow all outbound |
 
-| Port | Protocol | Source | Purpose |
-|------|----------|--------|---------|
-| 80 | TCP | 0.0.0.0/0 | HTTP (Nginx) |
-| 443 | TCP | 0.0.0.0/0 | HTTPS (Nginx) |
-| 8000 | TCP | 0.0.0.0/0 | FastAPI (internal) |
-| 22 | TCP | [Your IP] | SSH |
+> Port 8000 (Gunicorn) should **not** be publicly exposed. Nginx proxies from 80 → 8000 locally.
 
-#### Database Security Group (patient-app-db-sg)
+### `patient-app-db-sg` (Database EC2)
 
-| Port | Protocol | Source | Purpose |
-|------|----------|--------|---------|
-| 3306 | TCP | patient-app-backend-sg | MySQL |
-| 22 | TCP | [Your IP] | SSH |
+| Direction | Port | Protocol | Source | Purpose |
+|---|---|---|---|---|
+| Inbound | 22 | TCP | Your IP only | SSH |
+| Inbound | 3306 | TCP | patient-app-backend-sg | MySQL from backend only |
+| Outbound | All | All | 0.0.0.0/0 | Allow all outbound |
 
-### 7. VPC and Networking (Optional)
+### `patient-app-frontend-sg` (Frontend EC2)
 
-**Recommended Setup**:
-- **VPC**: Single VPC with multiple subnets
-- **Frontend**: Public subnet (has internet gateway)
-- **Backend**: Private subnet with NAT gateway
-- **Database**: Private subnet (no direct internet access)
-- **Route Tables**: Separate for public/private subnets
-
-### 8. CloudWatch Monitoring (Optional)
-
-**Recommended Metrics**:
-- EC2 CPU Utilization
-- EC2 Memory Usage (CloudWatch Agent required)
-- Network In/Out
-- EBS Volume Read/Write
-- MySQL Connection Count
-- S3 Upload Frequency
-
-**Alarms**:
-- High CPU (>80%)
-- High Memory (>80%)
-- MySQL Connection Errors
-- S3 Upload Failures
+| Direction | Port | Protocol | Source | Purpose |
+|---|---|---|---|---|
+| Inbound | 22 | TCP | Your IP only | SSH |
+| Inbound | 80 | TCP | 0.0.0.0/0 | HTTP |
+| Inbound | 443 | TCP | 0.0.0.0/0 | HTTPS (optional) |
+| Outbound | All | All | 0.0.0.0/0 | Allow all outbound |
 
 ---
 
-## Data Flow Diagrams
+## Data Flows
 
-### 1. User Registration Flow
-
+### Application Startup
 ```
-┌─────────┐
-│ Browser │
-└────┬────┘
-     │ POST /api/auth/register
-     ▼
-┌──────────────────┐
-│ Frontend React   │
-└────┬─────────────┘
-     │ Axios HTTP
-     ▼
-┌──────────────────┐
-│ Nginx (Backend)  │
-└────┬─────────────┘
-     │ Proxy Pass
-     ▼
-┌──────────────────┐
-│ FastAPI          │
-│ - Hash Password  │
-│ - Save User      │
-└────┬─────────────┘
-     │ SQLAlchemy ORM
-     ▼
-┌──────────────────┐
-│ MySQL Database   │
-└──────────────────┘
+Backend EC2 boots
+  → boto3 calls Secrets Manager (via IAM role — no keys needed)
+  → Secrets loaded into settings (DB URL, JWT secret, bucket name)
+  → SQLAlchemy connects to MySQL
+  → Tables created if not exist (including patient_documents)
+  → App ready to serve
 ```
 
-### 2. Patient Image Upload Flow
-
+### Patient Document Upload
 ```
-┌─────────┐
-│ Browser │
-└────┬────┘
-     │ POST /api/patients/{id}/upload-image
-     ▼
-┌──────────────────┐
-│ Frontend React   │
-└────┬─────────────┘
-     │ FormData with File
-     ▼
-┌──────────────────┐
-│ Nginx (Backend)  │
-└────┬─────────────┘
-     │ Proxy Pass
-     ▼
-┌──────────────────┐
-│ FastAPI          │
-│ - Validate File  │
-│ - Generate Name  │
-└────┬─────────────┘
-     │ boto3.upload_fileobj
-     ▼
-┌──────────────────┐
-│ S3 Bucket        │
-│ (Auto-encrypted  │
-│  with KMS)       │
-└──────────────────┘
-     │
-     ▼
-┌──────────────────┐
-│ AWS KMS          │
-│ (Encrypt object) │
-└──────────────────┘
+User selects file + document type in browser
+  → POST /api/patients/{id}/documents (multipart/form-data)
+  → Backend validates: JWT token, patient ownership, file type, file size
+  → boto3.upload_fileobj → S3 (SSE-KMS encrypts automatically)
+  → S3 key stored in patient_documents table
+  → DocumentResponse returned (no S3 URL — key only)
 ```
 
-### 3. Secrets Retrieval Flow
-
+### Document View (Pre-signed URL)
 ```
-┌──────────────────┐
-│ Backend EC2      │
-│ Startup          │
-└────┬─────────────┘
-     │ boto3.client('secretsmanager')
-     ▼
-┌──────────────────┐
-│ AWS Secrets Mgr  │
-│ (Validate Role)  │
-└────┬─────────────┘
-     │ Check IAM Role Permissions
-     ▼
-┌──────────────────┐
-│ IAM Service      │
-└────┬─────────────┘
-     │ Return Secret
-     ▼
-┌──────────────────┐
-│ Backend EC2      │
-│ (Load into       │
-│  settings)       │
-└──────────────────┘
+User clicks "View" on a document
+  → GET /api/patients/{id}/documents/{doc_id}/url
+  → Backend validates ownership
+  → boto3.generate_presigned_url → temporary URL (1 hour TTL)
+  → Frontend opens URL in new tab
+  → Browser fetches file directly from S3 (URL expires after 1 hr)
+```
+
+### Document Delete
+```
+User clicks "Delete"
+  → DELETE /api/patients/{id}/documents/{doc_id}
+  → DB record deleted first
+  → boto3.delete_object → S3 file deleted
+  → 204 No Content returned
 ```
 
 ---
 
-## Cost Analysis
+## KMS Encryption
 
-### Monthly Cost Breakdown (Approximate)
+S3 encryption is handled entirely by AWS — the application code does not deal with KMS key IDs.
 
-| Service | Details | Cost |
-|---------|---------|------|
-| EC2 | 3x t3.small/medium | $25 |
-| EBS Storage | 70 GB | $5 |
+When a file is uploaded:
+1. S3 receives the object
+2. S3 checks the bucket's **default encryption** setting (SSE-KMS)
+3. S3 calls KMS to generate a data key
+4. S3 encrypts the object with that key
+5. Only principals with `kms:Decrypt` + `kms:GenerateDataKey` can access the object
+
+The backend EC2's IAM role has these KMS permissions, which is why pre-signed URLs and direct reads work.
+
+---
+
+## Cost Estimate (Monthly)
+
+| Service | Details | Est. Cost |
+|---|---|---|
+| EC2 (3 instances) | 2× t3.small + 1× t3.medium | ~$28 |
+| EBS Storage | 70 GB GP3 total | ~$6 |
 | Secrets Manager | 1 secret | $0.40 |
-| S3 Storage | 10 GB @ $0.023/GB | $0.23 |
-| S3 Requests | 1000 uploads/month | $0.05 |
-| KMS | 1 key + requests | $1.50 |
-| Data Transfer | 1 GB @ $0.09/GB | $0.09 |
-| **Total** | | **~$32/month** |
-
-**Cost Optimization**:
-- Use Reserved Instances for 30-40% savings
-- Use S3 Intelligent-Tiering for archival
-- Enable S3 Lifecycle policies
-- Use CloudFront for static assets CDN
+| S3 Storage | 10 GB documents | ~$0.23 |
+| S3 Requests | PutObject + GetObject + presigned | ~$0.10 |
+| KMS | 1 key + API calls | ~$1.50 |
+| Data Transfer | 5 GB outbound | ~$0.45 |
+| **Total** | | **~$37/month** |
 
 ---
 
-## Security Best Practices
+## Security Checklist
 
-### Implemented
-✓ No hardcoded credentials (Secrets Manager)
-✓ IAM roles instead of access keys
-✓ Security groups restrict traffic
-✓ Passwords hashed with bcrypt
-✓ JWT for authentication
-✓ S3 encryption with KMS
-✓ HTTPS recommended (Certbot)
-
-### Recommended
-- [ ] Enable VPC Flow Logs
-- [ ] Enable CloudTrail
-- [ ] Enable Config Rules
-- [ ] Use WAF (Web Application Firewall)
-- [ ] Enable GuardDuty
-- [ ] Enable Macie for S3 scanning
-- [ ] Encrypt EBS volumes
-- [ ] Regular security audits
+- [x] No hardcoded credentials anywhere in code
+- [x] IAM role instead of access keys on EC2
+- [x] S3 bucket public access fully blocked
+- [x] Documents accessed only via pre-signed URLs
+- [x] KMS encryption on all S3 objects
+- [x] JWT authentication on all patient/document endpoints
+- [x] Per-user data isolation enforced in all queries
+- [x] bcrypt password hashing (12 rounds)
+- [x] Input validation on all endpoints (Pydantic)
+- [ ] HTTPS / TLS via Certbot (recommended for production)
+- [ ] VPC Flow Logs
+- [ ] CloudTrail enabled
+- [ ] GuardDuty enabled
 
 ---
 
-## Scaling Considerations
-
-### Horizontal Scaling (Add More Instances)
-- Add more backend instances behind ALB
-- Use RDS for managed MySQL
-- Add CloudFront for frontend caching
-
-### Vertical Scaling (Bigger Instances)
-- Upgrade to t3.large for backend
-- Upgrade to t3.medium for database
-- Increase EBS volume size
-
-### Auto-Scaling (Optional)
-- Use AWS Auto Scaling Groups
-- Scale based on CPU/Memory
-- Requires load balancer (ALB/NLB)
-
-### Database Scaling
-- Switch to RDS with Multi-AZ
-- Enable Read Replicas
-- Use Aurora for better performance
-
----
-
-## Disaster Recovery
-
-### Backup Strategy
-```bash
-# Daily MySQL backups
-* 2 * * * * mysqldump -h [host] -u [user] -p[pass] [db] > /backup/$(date +\%Y\%m\%d).sql
-
-# S3 versioning enabled for image recovery
-# Secrets Manager has automatic audit trail
-```
-
-### Recovery Time Objectives (RTO)
-- **Frontend**: 5 minutes (redeploy)
-- **Backend**: 15 minutes (restore from backup)
-- **Database**: 30 minutes (restore from backup)
-
-### Backup Locations
-- Database backups: S3 or external storage
-- Configuration: AWS Secrets Manager
-- Code: Git repository
-
----
-
-## Monitoring and Alerting
-
-### Key Metrics
-1. **Application**: Request latency, error rate, throughput
-2. **Infrastructure**: CPU, memory, disk usage, network
-3. **Database**: Connections, queries/sec, replication lag
-4. **Storage**: S3 requests, bucket size
-
-### Alerting Rules
-- Backend down → PagerDuty
-- High error rate (>5%) → Slack
-- Database connection pool full → SMS
-- S3 upload failures → Email
-
-### Logging
-- Application logs: CloudWatch
-- Access logs: Nginx access.log
-- Error logs: Nginx error.log
-- Database logs: MySQL error.log
-
----
-
-## Compliance Considerations
-
-### HIPAA (Healthcare)
-- Encryption at rest (KMS) ✓
-- Encryption in transit (HTTPS)
-- Access logging (CloudTrail)
-- Data residency (region-specific)
-
-### GDPR (EU Data Protection)
-- Data deletion on request
-- Data portability
-- Consent management
-- Privacy policy
-
-### CCPA (California Privacy)
-- Similar to GDPR
-- Additional requirements for California residents
-
----
-
-## Next Steps
-
-1. Review this architecture with your team
-2. Adjust instance types based on expected load
-3. Implement monitoring and alerting
-4. Set up automated backups
-5. Plan for disaster recovery
-6. Configure HTTPS/SSL certificates
-7. Document runbooks for operations
-8. Schedule regular security audits
-
----
-
-**Document Version**: 1.0
-**Last Updated**: January 2024
-**Author**: DevOps Team
+**Last updated**: June 2026

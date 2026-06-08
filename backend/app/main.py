@@ -5,7 +5,7 @@ from app.database import init_db
 from app.core.config import settings
 from app.utils.aws import load_secrets_from_manager
 from app.models import Base
-from app.api import auth, patients
+from app.api import auth, patients, documents
 
 
 @asynccontextmanager
@@ -50,6 +50,7 @@ app.add_middleware(
 # Include routers
 app.include_router(auth.router, prefix=settings.api_prefix)
 app.include_router(patients.router, prefix=settings.api_prefix)
+app.include_router(documents.router, prefix=settings.api_prefix)
 
 
 @app.get("/health")
