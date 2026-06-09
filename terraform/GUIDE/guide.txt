@@ -1,0 +1,313 @@
+This is a good time to rethink the architecture before writing Terraform.
+
+A few things I'd change from your initial plan.
+
+# What I would keep
+
+### Networking
+
+* Custom VPC
+* 2 AZs for HA
+* Public subnets
+* Private subnets
+* Route Tables
+* Internet Gateway
+* NAT Gateway
+* VPC Endpoints
+* Security Groups
+
+### Security
+
+* KMS CMK for S3 encryption
+* Secrets Manager
+* IAM Roles
+* Least privilege policies
+
+### Application
+
+* Frontend
+* Backend
+* Load Balancers
+* Route53
+
+---
+
+# What I would change
+
+## 1. Move MySQL to RDS
+
+Don't autoscale MySQL EC2.
+
+Instead:
+
+```text
+EC2 MySQL  ❌
+RDS MySQL  ✅
+```
+
+Benefits:
+
+* Automated backups
+* Multi-AZ
+* Automatic patching
+* Easier maintenance
+* Production-grade architecture
+
+For interviews and resumes this is also much stronger.
+
+---
+
+## 2. Frontend should NOT be on EC2
+
+You currently have:
+
+```text
+Frontend EC2
+Backend EC2
+MySQL EC2
+```
+
+I would move frontend to:
+
+```text
+S3 Static Website
++
+CloudFront
+```
+
+Architecture:
+
+```text
+Users
+  |
+CloudFront
+  |
+S3 Frontend
+```
+
+Benefits:
+
+* Cheaper
+* Faster
+* Highly available
+* No autoscaling required
+
+Your React/Vue/HTML frontend becomes static assets.
+
+---
+
+## 3. Backend in ASG
+
+Keep backend on EC2.
+
+```text
+Private Subnet
+    |
+ASG
+    |
+Launch Template
+```
+
+Min: 2
+
+Desired: 2
+
+Max: 4
+
+Across two AZs.
+
+---
+
+# Load Balancers
+
+## Public ALB
+
+```text
+Internet
+   |
+Public ALB
+   |
+Backend ASG
+```
+
+This handles:
+
+```text
+api.domain.com
+```
+
+---
+
+## Internal ALB?
+
+Not needed.
+
+You mentioned:
+
+```text
+Frontend -> Internal ALB -> Backend
+```
+
+If frontend becomes S3 + CloudFront, browser traffic directly calls:
+
+```text
+https://api.domain.com
+```
+
+through the public ALB.
+
+Much simpler.
+
+---
+
+# VPC Endpoint
+
+Definitely.
+
+Create:
+
+```text
+Gateway Endpoint
+```
+
+for:
+
+```text
+S3
+```
+
+Backend instances access S3 without internet.
+
+---
+
+# Bastion
+
+For learning:
+
+```text
+Public Subnet
+    |
+Bastion Host
+```
+
+Fine.
+
+For production:
+
+I'd use:
+
+```text
+AWS Systems Manager Session Manager
+```
+
+and remove Bastion entirely.
+
+But keeping Bastion is good Terraform practice.
+
+---
+
+# Proposed Architecture
+
+```text
+                Route53
+                    |
+             CloudFront
+                    |
+             S3 Frontend
+                    |
+          ----------------
+          |              |
+      Users         api.domain.com
+                          |
+                    Public ALB
+                          |
+                    Backend ASG
+                  (Private Subnets)
+                          |
+          ----------------------------
+          |            |             |
+        S3 VPCE   Secrets Manager   KMS
+                          |
+                        RDS
+                     (Multi-AZ)
+
+Public Subnets:
+    IGW
+    NAT GW
+    Bastion
+
+Private Subnets:
+    Backend ASG
+    RDS
+```
+
+---
+
+# Terraform Modules I Would Create
+
+### 01-network
+
+```text
+vpc
+subnets
+igw
+nat
+route tables
+```
+
+### 02-security
+
+```text
+security groups
+iam roles
+iam policies
+kms
+```
+
+### 03-storage
+
+```text
+s3
+secrets manager
+```
+
+### 04-database
+
+```text
+rds
+subnet groups
+parameter groups
+```
+
+### 05-compute
+
+```text
+launch templates
+asg
+bastion
+```
+
+### 06-load-balancing
+
+```text
+alb
+target groups
+listeners
+```
+
+### 07-dns
+
+```text
+route53
+```
+
+### 08-vpc-endpoints
+
+```text
+s3 endpoint
+ssm endpoints
+```
+
+---
+
+For learning Terraform and AWS architecture, this would be a much stronger design than simply recreating your current 3 EC2 setup. It demonstrates VPCs, HA, ASG, ALB, RDS, KMS, Secrets Manager, IAM, Route53, CloudFront, S3, and VPC Endpoints in one project.

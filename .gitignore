@@ -65,3 +65,20 @@ Thumbs.db
 
 # Alembic
 alembic/versions/__pycache__/
+
+# Terraform
+**/.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+*.tfoverride
+*.tfoverride.json
+.terraformrc
+terraform.rc
+*.tfvars
+*.tfvars.json
+*._override.tf
+*._override.tf.json
+.terraform.lock.hcl
+
