@@ -42,3 +42,13 @@ variable "aws_region" {
   type        = string
   description = "AWS Region name"
 }
+
+variable "ebs_volume_size" {
+  type        = number
+  description = "Size of the root EBS volume in GB"
+}
+
+variable "ebs_volume_type" {
+  type        = string
+  description = "Type of the root EBS volume"
+}

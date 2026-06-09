@@ -28,9 +28,9 @@ variable "jwt_secret" {
 }
 
 variable "s3_bucket_name" {
-    type = string  
+  type = string
 }
 
 variable "aws_region" {
-    type = string
+  type = string
 }

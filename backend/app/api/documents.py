@@ -25,7 +25,7 @@ PRESIGNED_URL_EXPIRY = 900
     response_model=DocumentResponse,
     status_code=status.HTTP_201_CREATED
 )
-async def upload_document(
+def upload_document(
     patient_id: int,
     file: UploadFile = File(...),
     document_type: str = Form(...),
@@ -42,7 +42,7 @@ async def upload_document(
 
     # Validate file type and size
     validate_document_file(file)
-    await validate_file_size(file)
+    validate_file_size(file)
 
     # Ensure the patient belongs to the current user
     patient = PatientService.get_patient_by_id(db, patient_id, current_user["user_id"])
@@ -75,7 +75,7 @@ async def upload_document(
 
 
 @router.get("/{patient_id}/documents", response_model=DocumentListResponse)
-async def list_documents(
+def list_documents(
     patient_id: int,
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
@@ -94,13 +94,20 @@ async def list_documents(
 
 
 @router.get("/{patient_id}/documents/{document_id}/url", response_model=DocumentUrlResponse)
-async def get_document_url(
+def get_document_url(
     patient_id: int,
     document_id: int,
+    mode: str = "view",
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Generate a temporary pre-signed URL to view or download a document."""
+    if mode not in ["view", "download"]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid mode. Allowed values: view, download"
+        )
+
     doc = DocumentService.get_document_by_id(db, document_id, current_user["user_id"])
     if not doc or doc.patient_id != patient_id:
         raise HTTPException(
@@ -109,7 +116,13 @@ async def get_document_url(
         )
 
     try:
-        url = generate_presigned_url(settings.s3_bucket_name, doc.s3_key, PRESIGNED_URL_EXPIRY)
+        url = generate_presigned_url(
+            settings.s3_bucket_name,
+            doc.s3_key,
+            PRESIGNED_URL_EXPIRY,
+            mode=mode,
+            filename=doc.file_name
+        )
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -120,7 +133,7 @@ async def get_document_url(
 
 
 @router.delete("/{patient_id}/documents/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_document(
+def delete_document(
     patient_id: int,
     document_id: int,
     current_user: dict = Depends(get_current_user),

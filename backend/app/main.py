@@ -40,9 +40,20 @@ app = FastAPI(
 )
 
 # Configure CORS
+origins = list(settings.allowed_origins) if settings.allowed_origins else []
+if settings.debug:
+    origins.extend([
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:3000",
+        "http://localhost:8000",
+    ])
+# Ensure no duplicates
+origins = list(set(origins))
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, restrict to frontend domain
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

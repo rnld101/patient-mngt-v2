@@ -14,7 +14,7 @@ router = APIRouter(prefix="/patients", tags=["Patients"])
 
 
 @router.post("", response_model=PatientResponse, status_code=status.HTTP_201_CREATED)
-async def create_patient(
+def create_patient(
     patient_data: PatientCreate,
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
@@ -29,7 +29,7 @@ async def create_patient(
 
 
 @router.get("", response_model=PatientsListResponse)
-async def get_patients(
+def get_patients(
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -42,7 +42,7 @@ async def get_patients(
 
 
 @router.get("/{patient_id}", response_model=PatientResponse)
-async def get_patient(
+def get_patient(
     patient_id: int,
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
@@ -58,7 +58,7 @@ async def get_patient(
 
 
 @router.put("/{patient_id}", response_model=PatientResponse)
-async def update_patient(
+def update_patient(
     patient_id: int,
     patient_data: PatientUpdate,
     current_user: dict = Depends(get_current_user),
@@ -80,7 +80,7 @@ async def update_patient(
 
 
 @router.delete("/{patient_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_patient(
+def delete_patient(
     patient_id: int,
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)

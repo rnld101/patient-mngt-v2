@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 
-export const DocumentViewerModal = ({ isOpen, onClose, doc, url }) => {
+export const DocumentViewerModal = ({ isOpen, onClose, doc, url, downloadUrl }) => {
   if (!isOpen || !doc) return null
 
   const [loading, setLoading] = useState(true)
@@ -116,7 +116,7 @@ export const DocumentViewerModal = ({ isOpen, onClose, doc, url }) => {
                 This file format ({fileExtension.toUpperCase()}) cannot be rendered directly in the browser.
               </p>
               <a
-                href={url}
+                href={downloadUrl}
                 download={fileName}
                 target="_blank"
                 rel="noopener noreferrer"

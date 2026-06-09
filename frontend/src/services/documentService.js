@@ -17,8 +17,10 @@ export const documentService = {
   },
 
   // Get a temporary pre-signed URL to view/download a document
-  getDocumentUrl: (patientId, documentId) => {
-    return api.get(`/patients/${patientId}/documents/${documentId}/url`)
+  getDocumentUrl: (patientId, documentId, mode = 'view') => {
+    return api.get(`/patients/${patientId}/documents/${documentId}/url`, {
+      params: { mode }
+    })
   },
 
   // Delete a document

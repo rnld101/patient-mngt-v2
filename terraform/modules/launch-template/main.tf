@@ -23,8 +23,8 @@ resource "aws_launch_template" "backend" {
     device_name = "/dev/sda1"
 
     ebs {
-      volume_size           = 20
-      volume_type           = "gp3"
+      volume_size           = var.ebs_volume_size
+      volume_type           = var.ebs_volume_type
       delete_on_termination = true
       encrypted             = true
     }

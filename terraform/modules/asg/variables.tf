@@ -37,3 +37,23 @@ variable "certificate_arn" {
   type        = string
   description = "ACM Certificate ARN for the HTTPS listener"
 }
+
+variable "asg_min_size" {
+  type        = number
+  description = "Minimum size of the Auto Scaling Group"
+}
+
+variable "asg_max_size" {
+  type        = number
+  description = "Maximum size of the Auto Scaling Group"
+}
+
+variable "asg_desired_capacity" {
+  type        = number
+  description = "Desired capacity of the Auto Scaling Group"
+}
+
+variable "asg_health_check_grace_period" {
+  type        = number
+  description = "ASG health check grace period in seconds"
+}

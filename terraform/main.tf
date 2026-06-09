@@ -42,6 +42,25 @@ module "vpc" {
   }
 }
 
+# ----- Dynamic Data Lookups -----
+
+data "aws_ami" "ubuntu" {
+  most_recent = true
+  owners      = ["099720109477"] # Canonical
+
+  filter {
+    name   = "name"
+    values = ["ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"]
+  }
+
+  filter {
+    name   = "virtualization-type"
+    values = ["hvm"]
+  }
+}
+
+
+
 module "kms" {
   source = "./modules/kms"
 
@@ -75,9 +94,9 @@ module "s3" {
 module "security_groups" {
   source = "./modules/security-groups"
 
-  project_name = var.project_name
-  vpc_id       = module.vpc.vpc_id
-  admin_cidr   = var.admin_cidr
+  project_name            = var.project_name
+  vpc_id                  = module.vpc.vpc_id
+  alb_ingress_cidr_blocks = var.alb_ingress_cidr_blocks
 }
 
 module "iam" {
@@ -102,13 +121,21 @@ module "rds" {
   rds_sg_id = module.security_groups.rds_sg_id
 
   db_subnet_group_name = module.vpc.database_subnet_group_name
+
+  rds_instance_class          = var.rds_instance_class
+  rds_allocated_storage       = var.rds_allocated_storage
+  rds_max_allocated_storage   = var.rds_max_allocated_storage
+  rds_backup_retention_period = var.rds_backup_retention_period
+  rds_multi_az                = var.rds_multi_az
+  rds_deletion_protection     = var.rds_deletion_protection
+  rds_skip_final_snapshot     = var.rds_skip_final_snapshot
 }
 
 module "launch_template" {
   source = "./modules/launch-template"
 
   project_name          = var.project_name
-  ami_id                = var.ami_id
+  ami_id                = data.aws_ami.ubuntu.id
   instance_type         = var.instance_type
   instance_profile_name = module.iam.instance_profile_name
   security_group_id     = module.security_groups.backend_sg_id
@@ -116,20 +143,27 @@ module "launch_template" {
   git_tag               = var.git_tag
   secret_name           = module.secrets.secret_arn
   aws_region            = var.aws_region
+  ebs_volume_size       = var.ebs_volume_size
+  ebs_volume_type       = var.ebs_volume_type
 }
 
 module "asg" {
   source = "./modules/asg"
 
-  project_name            = var.project_name
-  vpc_id                  = module.vpc.vpc_id
-  public_subnet_ids       = module.vpc.public_subnets
-  private_subnet_ids      = module.vpc.private_subnets
-  alb_sg_id               = module.security_groups.alb_sg_id
-  launch_template_id      = module.launch_template.launch_template_id
-  launch_template_version = module.launch_template.launch_template_latest_version
-  certificate_arn         = var.acm_certificate_arn
+  project_name                  = var.project_name
+  vpc_id                        = module.vpc.vpc_id
+  public_subnet_ids             = module.vpc.public_subnets
+  private_subnet_ids            = module.vpc.private_subnets
+  alb_sg_id                     = module.security_groups.alb_sg_id
+  launch_template_id            = module.launch_template.launch_template_id
+  launch_template_version       = module.launch_template.launch_template_latest_version
+  certificate_arn               = var.acm_certificate_arn
+  asg_min_size                  = var.asg_min_size
+  asg_max_size                  = var.asg_max_size
+  asg_desired_capacity          = var.asg_desired_capacity
+  asg_health_check_grace_period = var.asg_health_check_grace_period
 }
+
 
 module "frontend" {
   source = "./modules/frontend"
@@ -147,4 +181,112 @@ module "dns" {
   alb_zone_id               = module.asg.alb_zone_id
   cloudfront_domain_name    = module.frontend.cloudfront_domain_name
   cloudfront_hosted_zone_id = module.frontend.cloudfront_hosted_zone_id
+}
+
+# ----- Private VPC Interface Endpoints -----
+
+resource "aws_security_group" "vpc_endpoints" {
+  name        = "${var.project_name}-vpce-sg"
+  description = "Security Group for VPC Interface Endpoints"
+  vpc_id      = module.vpc.vpc_id
+
+  ingress {
+    description = "HTTPS from VPC"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = [module.vpc.vpc_cidr_block]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name      = "${var.project_name}-vpce-sg"
+    Project   = var.project_name
+    ManagedBy = "Terraform"
+  }
+}
+
+resource "aws_vpc_endpoint" "ssm" {
+  vpc_id            = module.vpc.vpc_id
+  service_name      = "com.amazonaws.${var.aws_region}.ssm"
+  vpc_endpoint_type = "Interface"
+
+  security_group_ids  = [aws_security_group.vpc_endpoints.id]
+  subnet_ids          = module.vpc.private_subnets
+  private_dns_enabled = true
+
+  tags = {
+    Name      = "${var.project_name}-ssm-vpce"
+    Project   = var.project_name
+    ManagedBy = "Terraform"
+  }
+}
+
+resource "aws_vpc_endpoint" "ssmmessages" {
+  vpc_id            = module.vpc.vpc_id
+  service_name      = "com.amazonaws.${var.aws_region}.ssmmessages"
+  vpc_endpoint_type = "Interface"
+
+  security_group_ids  = [aws_security_group.vpc_endpoints.id]
+  subnet_ids          = module.vpc.private_subnets
+  private_dns_enabled = true
+
+  tags = {
+    Name      = "${var.project_name}-ssmmessages-vpce"
+    Project   = var.project_name
+    ManagedBy = "Terraform"
+  }
+}
+
+resource "aws_vpc_endpoint" "ec2messages" {
+  vpc_id            = module.vpc.vpc_id
+  service_name      = "com.amazonaws.${var.aws_region}.ec2messages"
+  vpc_endpoint_type = "Interface"
+
+  security_group_ids  = [aws_security_group.vpc_endpoints.id]
+  subnet_ids          = module.vpc.private_subnets
+  private_dns_enabled = true
+
+  tags = {
+    Name      = "${var.project_name}-ec2messages-vpce"
+    Project   = var.project_name
+    ManagedBy = "Terraform"
+  }
+}
+
+resource "aws_vpc_endpoint" "secretsmanager" {
+  vpc_id            = module.vpc.vpc_id
+  service_name      = "com.amazonaws.${var.aws_region}.secretsmanager"
+  vpc_endpoint_type = "Interface"
+
+  security_group_ids  = [aws_security_group.vpc_endpoints.id]
+  subnet_ids          = module.vpc.private_subnets
+  private_dns_enabled = true
+
+  tags = {
+    Name      = "${var.project_name}-secretsmanager-vpce"
+    Project   = var.project_name
+    ManagedBy = "Terraform"
+  }
+}
+
+# ----- Private S3 Gateway Endpoint -----
+
+resource "aws_vpc_endpoint" "s3" {
+  vpc_id            = module.vpc.vpc_id
+  service_name      = "com.amazonaws.${var.aws_region}.s3"
+  vpc_endpoint_type = "Gateway"
+  route_table_ids   = concat(module.vpc.private_route_table_ids, module.vpc.public_route_table_ids)
+
+  tags = {
+    Name      = "${var.project_name}-s3-vpce"
+    Project   = var.project_name
+    ManagedBy = "Terraform"
+  }
 }

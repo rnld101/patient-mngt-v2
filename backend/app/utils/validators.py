@@ -28,13 +28,13 @@ def validate_document_file(file: UploadFile) -> bool:
     return True
 
 
-async def validate_file_size(file: UploadFile) -> bool:
+def validate_file_size(file: UploadFile) -> bool:
     """Validate that the uploaded file does not exceed the size limit."""
-    content = await file.read()
+    content = file.file.read()
     file_size = len(content)
 
     # Reset file pointer so the file can be read again for upload
-    await file.seek(0)
+    file.file.seek(0)
 
     if file_size > MAX_FILE_SIZE:
         raise HTTPException(

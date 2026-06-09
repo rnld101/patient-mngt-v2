@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     
     # AWS Region
     aws_region: Optional[str] = None
+
+    # CORS configuration
+    allowed_origins: list[str] = ["https://lavenbloom.xyz", "https://www.lavenbloom.xyz"]
     
     class Config:
         env_file = ".env"

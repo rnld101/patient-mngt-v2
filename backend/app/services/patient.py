@@ -1,7 +1,9 @@
 from sqlalchemy.orm import Session
-from app.models import Patient
+from app.models import Patient, PatientDocument
 from app.schemas import PatientCreate, PatientUpdate
 from typing import Optional
+from app.utils.aws import delete_file_from_s3
+from app.core.config import settings
 
 
 class PatientService:
@@ -57,7 +59,7 @@ class PatientService:
 
     @staticmethod
     def delete_patient(db: Session, patient_id: int, user_id: int) -> bool:
-        """Delete a patient."""
+        """Delete a patient and all their associated documents (S3 + DB metadata)."""
         patient = db.query(Patient).filter(
             Patient.id == patient_id,
             Patient.user_id == user_id
@@ -66,6 +68,23 @@ class PatientService:
         if not patient:
             return False
 
+        # Find and delete all associated documents
+        docs = db.query(PatientDocument).filter(
+            PatientDocument.patient_id == patient_id,
+            PatientDocument.user_id == user_id
+        ).all()
+
+        for doc in docs:
+            # Best-effort S3 file deletion
+            try:
+                delete_file_from_s3(settings.s3_bucket_name, doc.s3_key)
+            except Exception as e:
+                print(f"Warning: failed to delete S3 object {doc.s3_key} during patient deletion: {e}")
+            
+            # Delete document metadata record
+            db.delete(doc)
+
+        # Delete patient record
         db.delete(patient)
         db.commit()
         return True

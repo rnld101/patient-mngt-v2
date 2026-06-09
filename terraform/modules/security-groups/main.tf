@@ -12,9 +12,7 @@ module "alb_sg" {
     "https-443-tcp"
   ]
 
-  ingress_cidr_blocks = [
-    "0.0.0.0/0"
-  ]
+  ingress_cidr_blocks = var.alb_ingress_cidr_blocks
 
   egress_rules = [
     "all-all"
@@ -37,13 +35,6 @@ module "backend_sg" {
       to_port                  = 8000
       protocol                 = "tcp"
       source_security_group_id = module.alb_sg.security_group_id
-    },
-    {
-      description              = "SSH from Bastion"
-      from_port                = 22
-      to_port                  = 22
-      protocol                 = "tcp"
-      source_security_group_id = module.bastion_sg.security_group_id
     }
   ]
 
@@ -66,28 +57,6 @@ module "rds_sg" {
       rule                     = "mysql-tcp"
       source_security_group_id = module.backend_sg.security_group_id
     }
-  ]
-
-  egress_rules = [
-    "all-all"
-  ]
-}
-
-module "bastion_sg" {
-  source  = "terraform-aws-modules/security-group/aws"
-  version = "~> 5.3"
-
-  name        = "${var.project_name}-bastion-sg"
-  description = "Bastion Security Group"
-
-  vpc_id = var.vpc_id
-
-  ingress_cidr_blocks = [
-    var.admin_cidr
-  ]
-
-  ingress_rules = [
-    "ssh-tcp"
   ]
 
   egress_rules = [

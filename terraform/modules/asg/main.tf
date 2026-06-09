@@ -69,13 +69,13 @@ resource "aws_autoscaling_group" "backend" {
   vpc_zone_identifier = var.private_subnet_ids
   target_group_arns   = [aws_lb_target_group.api.arn]
 
-  min_size         = 1
-  max_size         = 2
-  desired_capacity = 1
+  min_size         = var.asg_min_size
+  max_size         = var.asg_max_size
+  desired_capacity = var.asg_desired_capacity
 
   force_delete              = true
   health_check_type         = "ELB"
-  health_check_grace_period = 300
+  health_check_grace_period = var.asg_health_check_grace_period
 
   launch_template {
     id      = var.launch_template_id

@@ -4,6 +4,9 @@ import mimetypes
 from botocore.config import Config
 from app.core.config import settings
 
+# Register DICOM MIME type
+mimetypes.add_type('application/dicom', '.dcm')
+
 # SigV4 is required for S3 objects encrypted with SSE-KMS.
 # All S3 operations use this shared configuration.
 _S3_CONFIG = Config(
@@ -95,14 +98,12 @@ def upload_file_to_s3(file_obj, bucket_name: str, object_key: str, content_type:
         raise RuntimeError(f"Failed to upload file to S3: {str(e)}")
 
 
-def generate_presigned_url(bucket_name: str, object_key: str, expiry: int = 3600) -> str:
+def generate_presigned_url(bucket_name: str, object_key: str, expiry: int = 3600, mode: str = "view", filename: str = None) -> str:
     """
     Generate a SigV4 pre-signed URL for a private S3 object.
 
-    The URL is valid for `expiry` seconds (default: 1 hour) and contains:
-        X-Amz-Algorithm=AWS4-HMAC-SHA256
-        X-Amz-Credential=...
-        X-Amz-Signature=...
+    The URL is valid for `expiry` seconds (default: 1 hour) and can be configured
+    as 'inline' (view mode) or 'attachment' (download mode).
 
     KMS-encrypted objects require SigV4.  The _s3_client() helper ensures
     the correct signature version is used for every call.
@@ -110,7 +111,15 @@ def generate_presigned_url(bucket_name: str, object_key: str, expiry: int = 3600
     try:
         content_type, _ = mimetypes.guess_type(object_key)
         params = {"Bucket": bucket_name, "Key": object_key}
-        params["ResponseContentDisposition"] = "inline"
+        
+        if mode == "download":
+            disposition_filename = filename or object_key.split('/')[-1]
+            # Force download/attachment headers
+            params["ResponseContentDisposition"] = f'attachment; filename="{disposition_filename}"'
+        else:
+            # Force inline rendering
+            params["ResponseContentDisposition"] = "inline"
+
         if content_type:
             params["ResponseContentType"] = content_type
 

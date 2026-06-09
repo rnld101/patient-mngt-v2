@@ -35,6 +35,7 @@ export const PatientDocumentsPage = () => {
   const [isViewerOpen, setIsViewerOpen] = useState(false)
   const [viewerDoc, setViewerDoc] = useState(null)
   const [viewerUrl, setViewerUrl] = useState('')
+  const [downloadUrl, setDownloadUrl] = useState('')
 
   useEffect(() => {
     loadPage()
@@ -86,9 +87,13 @@ export const PatientDocumentsPage = () => {
 
   const handleView = async (doc) => {
     try {
-      const res = await documentService.getDocumentUrl(patientId, doc.id)
+      const [viewRes, downloadRes] = await Promise.all([
+        documentService.getDocumentUrl(patientId, doc.id, 'view'),
+        documentService.getDocumentUrl(patientId, doc.id, 'download'),
+      ])
       setViewerDoc(doc)
-      setViewerUrl(res.data.url)
+      setViewerUrl(viewRes.data.url)
+      setDownloadUrl(downloadRes.data.url)
       setIsViewerOpen(true)
     } catch (err) {
       setError('Failed to generate document URL. Please try again.')
@@ -299,9 +304,11 @@ export const PatientDocumentsPage = () => {
           setIsViewerOpen(false)
           setViewerDoc(null)
           setViewerUrl('')
+          setDownloadUrl('')
         }}
         doc={viewerDoc}
         url={viewerUrl}
+        downloadUrl={downloadUrl}
       />
     </div>
   )

@@ -82,6 +82,11 @@ resource "aws_iam_role_policy_attachment" "backend" {
   policy_arn = aws_iam_policy.backend.arn
 }
 
+resource "aws_iam_role_policy_attachment" "ssm" {
+  role       = aws_iam_role.backend.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+
 resource "aws_iam_instance_profile" "backend" {
   name = "${var.project_name}-backend-instance-profile"
   role = aws_iam_role.backend.name
