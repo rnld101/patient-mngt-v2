@@ -1,4 +1,4 @@
-output "vpc_id" {
+﻿output "vpc_id" {
   value = module.vpc.vpc_id
 }
 
@@ -28,4 +28,14 @@ output "bucket_name" {
 
 output "bucket_arn" {
   value = module.s3.bucket_arn
+}
+
+output "rds_endpoint" {
+  description = "RDS instance endpoint - also stored in Secrets Manager under db_host"
+  value       = module.rds.endpoint
+}
+
+output "rds_db_name" {
+  description = "MySQL database name inside the RDS instance"
+  value       = module.rds.db_name
 }

@@ -53,10 +53,12 @@ module "secrets" {
 
   project_name = var.project_name
 
-  db_host        = var.db_host
-  db_name        = var.db_name
-  db_user        = var.db_user
-  db_password    = var.db_password
+  # Wired to live RDS outputs — host and db_name are only known after RDS is created
+  db_host     = module.rds.endpoint
+  db_name     = module.rds.db_name
+  db_user     = var.database_username
+  db_password = var.database_password
+
   jwt_secret     = var.jwt_secret
   s3_bucket_name = module.s3.bucket_name
   aws_region     = var.aws_region
@@ -83,7 +85,21 @@ module "iam" {
 
   project_name = var.project_name
 
-  bucket_arn = module.s3.bucket_arn
+  bucket_arn  = module.s3.bucket_arn
   kms_key_arn = module.kms.kms_key_arn
-  secret_arn = module.secrets.secret_arn
+  secret_arn  = module.secrets.secret_arn
+}
+
+module "rds" {
+  source = "./modules/rds"
+
+  project_name = var.project_name
+
+  database_name     = var.database_name
+  database_username = var.database_username
+  database_password = var.database_password
+
+  rds_sg_id = module.security_groups.rds_sg_id
+
+  db_subnet_group_name = module.vpc.database_subnet_group_name
 }
