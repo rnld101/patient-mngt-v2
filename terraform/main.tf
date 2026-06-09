@@ -53,13 +53,13 @@ module "secrets" {
 
   project_name = var.project_name
 
-  db_host = var.db_host
-  db_name = var.db_name
-  db_user = var.db_user
-  db_password = var.db_password
-  jwt_secret  = var.jwt_secret
+  db_host        = var.db_host
+  db_name        = var.db_name
+  db_user        = var.db_user
+  db_password    = var.db_password
+  jwt_secret     = var.jwt_secret
   s3_bucket_name = module.s3.bucket_name
-  aws_region = var.aws_region
+  aws_region     = var.aws_region
 }
 
 # KMS dependency
@@ -76,4 +76,14 @@ module "security_groups" {
   project_name = var.project_name
   vpc_id       = module.vpc.vpc_id
   admin_cidr   = var.admin_cidr
+}
+
+module "iam" {
+  source = "./modules/iam"
+
+  project_name = var.project_name
+
+  bucket_arn = module.s3.bucket_arn
+  kms_key_arn = module.kms.kms_key_arn
+  secret_arn = module.secrets.secret_arn
 }
