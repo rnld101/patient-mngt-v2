@@ -37,6 +37,13 @@ module "backend_sg" {
       to_port                  = 8000
       protocol                 = "tcp"
       source_security_group_id = module.alb_sg.security_group_id
+    },
+    {
+      description              = "SSH from Bastion"
+      from_port                = 22
+      to_port                  = 22
+      protocol                 = "tcp"
+      source_security_group_id = module.bastion_sg.security_group_id
     }
   ]
 

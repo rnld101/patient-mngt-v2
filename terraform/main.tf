@@ -103,3 +103,48 @@ module "rds" {
 
   db_subnet_group_name = module.vpc.database_subnet_group_name
 }
+
+module "launch_template" {
+  source = "./modules/launch-template"
+
+  project_name          = var.project_name
+  ami_id                = var.ami_id
+  instance_type         = var.instance_type
+  instance_profile_name = module.iam.instance_profile_name
+  security_group_id     = module.security_groups.backend_sg_id
+  git_repo_url          = var.git_repo_url
+  git_tag               = var.git_tag
+  secret_name           = module.secrets.secret_arn
+  aws_region            = var.aws_region
+}
+
+module "asg" {
+  source = "./modules/asg"
+
+  project_name            = var.project_name
+  vpc_id                  = module.vpc.vpc_id
+  public_subnet_ids       = module.vpc.public_subnets
+  private_subnet_ids      = module.vpc.private_subnets
+  alb_sg_id               = module.security_groups.alb_sg_id
+  launch_template_id      = module.launch_template.launch_template_id
+  launch_template_version = module.launch_template.launch_template_latest_version
+  certificate_arn         = var.acm_certificate_arn
+}
+
+module "frontend" {
+  source = "./modules/frontend"
+
+  project_name    = var.project_name
+  domain_name     = var.domain_name
+  certificate_arn = var.acm_certificate_arn
+}
+
+module "dns" {
+  source = "./modules/dns"
+
+  domain_name               = var.domain_name
+  alb_dns_name              = module.asg.alb_dns_name
+  alb_zone_id               = module.asg.alb_zone_id
+  cloudfront_domain_name    = module.frontend.cloudfront_domain_name
+  cloudfront_hosted_zone_id = module.frontend.cloudfront_hosted_zone_id
+}

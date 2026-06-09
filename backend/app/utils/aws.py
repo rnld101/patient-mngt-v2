@@ -1,11 +1,15 @@
 import boto3
 import json
+import mimetypes
 from botocore.config import Config
 from app.core.config import settings
 
 # SigV4 is required for S3 objects encrypted with SSE-KMS.
 # All S3 operations use this shared configuration.
-_S3_CONFIG = Config(signature_version="s3v4")
+_S3_CONFIG = Config(
+    signature_version="s3v4",
+    s3={"addressing_style": "virtual"}
+)
 
 
 def _s3_client():
@@ -70,7 +74,7 @@ def load_secrets_from_manager(secret_name: str):
         raise RuntimeError(f"Failed to load secrets: {str(e)}")
 
 
-def upload_file_to_s3(file_obj, bucket_name: str, object_key: str) -> str:
+def upload_file_to_s3(file_obj, bucket_name: str, object_key: str, content_type: str = None) -> str:
     """
     Upload a file to S3.
     The bucket must have SSE-KMS encryption enabled as the default.
@@ -78,7 +82,14 @@ def upload_file_to_s3(file_obj, bucket_name: str, object_key: str) -> str:
     Returns the S3 object key (never a public URL — use generate_presigned_url to access).
     """
     try:
-        _s3_client().upload_fileobj(file_obj, bucket_name, object_key)
+        if not content_type:
+            content_type, _ = mimetypes.guess_type(object_key)
+        
+        extra_args = {}
+        if content_type:
+            extra_args["ContentType"] = content_type
+
+        _s3_client().upload_fileobj(file_obj, bucket_name, object_key, ExtraArgs=extra_args)
         return object_key
     except Exception as e:
         raise RuntimeError(f"Failed to upload file to S3: {str(e)}")
@@ -97,9 +108,15 @@ def generate_presigned_url(bucket_name: str, object_key: str, expiry: int = 3600
     the correct signature version is used for every call.
     """
     try:
+        content_type, _ = mimetypes.guess_type(object_key)
+        params = {"Bucket": bucket_name, "Key": object_key}
+        params["ResponseContentDisposition"] = "inline"
+        if content_type:
+            params["ResponseContentType"] = content_type
+
         url = _s3_client().generate_presigned_url(
             "get_object",
-            Params={"Bucket": bucket_name, "Key": object_key},
+            Params=params,
             ExpiresIn=expiry,
         )
         return url

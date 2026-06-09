@@ -1,0 +1,59 @@
+#!/bin/bash
+# Enable logging to console and file
+exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
+
+echo "=== STARTING PATIENT MANAGEMENT BOOTSTRAP ==="
+
+# 1. Update system package index (NO apt upgrade, per constraints)
+echo "Updating packages..."
+apt-get update -y
+
+# 2. Install essential dependencies
+echo "Installing git, python3-venv, and python3-pip..."
+apt-get install -y git python3-venv python3-pip
+
+# 3. Create deploy directory and set owner to ubuntu
+echo "Creating application directory..."
+mkdir -p /opt/patient-app
+chown -R ubuntu:ubuntu /opt/patient-app
+
+# 4. Clone repository
+echo "Cloning repository..."
+sudo -u ubuntu git clone ${git_repo_url} /opt/patient-app
+
+# 5. Checkout the configured deployment tag
+echo "Checking out tag: ${git_tag}..."
+cd /opt/patient-app
+sudo -u ubuntu git checkout ${git_tag}
+
+# 6. Build backend virtual environment and install dependencies
+echo "Setting up virtualenv and pip dependencies..."
+cd /opt/patient-app/backend
+sudo -u ubuntu python3 -m venv venv
+sudo -u ubuntu ./venv/bin/pip install --upgrade pip
+sudo -u ubuntu ./venv/bin/pip install -r requirements.txt
+
+# 7. Install Gunicorn separately in virtualenv (per constraints)
+echo "Installing gunicorn..."
+sudo -u ubuntu ./venv/bin/pip install gunicorn
+
+# 8. Copy systemd service file
+echo "Configuring systemd service..."
+cp /opt/patient-app/backend/patient-app.service /etc/systemd/system/patient-app.service
+
+# 9. Inject application-specific environment overrides
+echo "Setting up service environment overrides..."
+mkdir -p /etc/systemd/system/patient-app.service.d
+cat <<EOF > /etc/systemd/system/patient-app.service.d/override.conf
+[Service]
+Environment="AWS_SECRET_NAME=${secret_name}"
+Environment="AWS_DEFAULT_REGION=${aws_region}"
+EOF
+
+# 10. Start and enable systemd service
+echo "Reloading systemd and starting service..."
+systemctl daemon-reload
+systemctl enable patient-app
+systemctl start patient-app
+
+echo "=== PATIENT MANAGEMENT BOOTSTRAP COMPLETE ==="

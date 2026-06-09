@@ -17,7 +17,7 @@ from app.core.config import settings
 router = APIRouter(prefix="/patients", tags=["Documents"])
 
 # Pre-signed URL validity in seconds (1 hour)
-PRESIGNED_URL_EXPIRY = 3600
+PRESIGNED_URL_EXPIRY = 900
 
 
 @router.post(
@@ -55,7 +55,7 @@ async def upload_document(
     # Generate a unique S3 key and upload
     s3_key = generate_unique_filename(file.filename)
     try:
-        upload_file_to_s3(file.file, settings.s3_bucket_name, s3_key)
+        upload_file_to_s3(file.file, settings.s3_bucket_name, s3_key, content_type=file.content_type)
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

@@ -3,11 +3,11 @@ Description=Patient Management API
 After=network.target
 
 [Service]
-Type=notify
+Type=simple
 User=ubuntu
-WorkingDirectory=/opt/patient-app
-Environment="PATH=/opt/patient-app/venv/bin"
-ExecStart=/opt/patient-app/venv/bin/gunicorn \
+WorkingDirectory=/opt/patient-app/backend
+Environment="PATH=/opt/patient-app/backend/venv/bin"
+ExecStart=/opt/patient-app/backend/venv/bin/gunicorn \
     --workers 4 \
     --worker-class uvicorn.workers.UvicornWorker \
     --bind 0.0.0.0:8000 \

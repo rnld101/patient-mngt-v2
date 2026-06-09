@@ -60,6 +60,18 @@ resource "aws_iam_policy" "backend" {
         ]
 
         Resource = "${var.bucket_arn}/*"
+      },
+
+      {
+        Sid    = "KMSAccess"
+        Effect = "Allow"
+
+        Action = [
+          "kms:GenerateDataKey",
+          "kms:Decrypt"
+        ]
+
+        Resource = var.kms_key_arn
       }
     ]
   })

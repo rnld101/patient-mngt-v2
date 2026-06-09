@@ -13,8 +13,9 @@ async def lifespan(app: FastAPI):
     """Handle startup and shutdown events."""
     # Startup
     try:
-        # Load secrets from AWS Secrets Manager
-        load_secrets_from_manager("patient-management-secrets")
+        import os
+        secret_name = os.getenv("AWS_SECRET_NAME", "patient-management-secrets")
+        load_secrets_from_manager(secret_name)
         
         # Initialize database
         init_db()

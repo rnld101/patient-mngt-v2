@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext'
 import { patientService } from '../services/patientService'
 import { documentService } from '../services/documentService'
 import { getErrorMessage } from '../utils/errorHandler'
+import { DocumentViewerModal } from '../components/DocumentViewerModal'
 
 const DOCUMENT_TYPES = [
   'Prescription',
@@ -29,6 +30,11 @@ export const PatientDocumentsPage = () => {
   const [documentType, setDocumentType] = useState(DOCUMENT_TYPES[0])
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState('')
+
+  // Viewer modal state
+  const [isViewerOpen, setIsViewerOpen] = useState(false)
+  const [viewerDoc, setViewerDoc] = useState(null)
+  const [viewerUrl, setViewerUrl] = useState('')
 
   useEffect(() => {
     loadPage()
@@ -81,7 +87,9 @@ export const PatientDocumentsPage = () => {
   const handleView = async (doc) => {
     try {
       const res = await documentService.getDocumentUrl(patientId, doc.id)
-      window.open(res.data.url, '_blank', 'noopener,noreferrer')
+      setViewerDoc(doc)
+      setViewerUrl(res.data.url)
+      setIsViewerOpen(true)
     } catch (err) {
       setError('Failed to generate document URL. Please try again.')
     }
@@ -284,6 +292,17 @@ export const PatientDocumentsPage = () => {
           )}
         </div>
       </main>
+
+      <DocumentViewerModal
+        isOpen={isViewerOpen}
+        onClose={() => {
+          setIsViewerOpen(false)
+          setViewerDoc(null)
+          setViewerUrl('')
+        }}
+        doc={viewerDoc}
+        url={viewerUrl}
+      />
     </div>
   )
 }
