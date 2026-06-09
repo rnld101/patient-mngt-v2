@@ -18,6 +18,8 @@ module "rds" {
   username = var.database_username
   password = var.database_password
 
+  manage_master_user_password = false
+
   port = 3306
 
   multi_az = var.rds_multi_az
