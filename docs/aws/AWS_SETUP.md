@@ -1,397 +1,124 @@
-# AWS Infrastructure Setup Guide
+# AWS Infrastructure Setup Guide (Terraform)
 
-Complete guide to create every AWS resource this application needs.
+This guide walks you through provisioning the complete multi-tier, highly available AWS environment for the Patient Management System. All resources are created automatically using Terraform.
 
-**Time required**: ~30–45 minutes  
-**Prerequisites**: AWS account with admin access, AWS CLI installed and configured
-
----
-
-## Overview
-
-You need to create these resources in order:
-
-1. **KMS key** — for S3 encryption
-2. **S3 bucket** — for document storage
-3. **IAM role** — for backend EC2 permissions
-4. **Secrets Manager secret** — for app credentials
-5. **Security groups** — for network access control
+**Time required**: ~15–20 minutes  
+**Prerequisites**: AWS account with administrator credentials, AWS CLI installed, and Terraform (~> 1.5) installed.
 
 ---
 
-## Step 1: Create KMS Key (Customer-Managed)
+## Prerequisites (External Assets)
 
-### Via AWS Console
+Before running Terraform, you must set up the following external resources. These cannot be easily automated and must be prepared beforehand:
 
-1. Go to **AWS KMS** → **Customer managed keys** → **Create key**
-2. Key type: **Symmetric**
-3. Key usage: **Encrypt and decrypt**
-4. Click **Next**
-5. Add alias: `patient-app-s3-key`
-6. Add tag: `Project` = `patient-management`
-7. Click **Next**
-8. Key administrators: select your IAM user/admin role
-9. Key usage permissions: **leave empty for now** (we'll add the EC2 role later)
-10. Click **Finish**
+### 1. Registered Domain Name
+You must own a registered domain name (e.g., `yourdomain.com`). If you do not have one, you can purchase it through Route53 or any external registrar.
 
-**Copy the Key ARN** — you'll need it for the IAM policy and S3 bucket.
+### 2. Route53 Public Hosted Zone
+Create a Route53 Public Hosted Zone for your domain in your AWS account. 
+* Go to **Route53** → **Hosted Zones** → **Create hosted zone**.
+* Domain name: `yourdomain.com`
+* Type: **Public Hosted Zone**
+* Click **Create hosted zone**.
+* If the domain is registered externally, update your registrar's nameservers with the four NS records assigned by Route53.
+* Terraform queries this zone at runtime using data lookups to attach DNS records automatically.
 
-### Via AWS CLI
-
-```bash
-aws kms create-key \
-  --description "S3 encryption key for Patient Management App" \
-  --tags TagKey=Project,TagValue=patient-management
-
-# Note the KeyId from the output, then create an alias:
-aws kms create-alias \
-  --alias-name alias/patient-app-s3-key \
-  --target-key-id YOUR-KEY-ID
-```
+### 3. AWS Certificate Manager (ACM) Wildcard SSL Certificate
+You must request a wildcard SSL certificate in the **`us-east-1` (N. Virginia)** region (required for CloudFront distributions).
+* Go to **AWS Certificate Manager** (switch region to `us-east-1`) → **Request certificate**.
+* Certificate type: **Request a public certificate**.
+* Domain names: `yourdomain.com` and `*.yourdomain.com`.
+* Validation method: **DNS validation** (recommended).
+* Once requested, click **Create records in Route 53** to complete validation. Wait for status to show **Issued**.
+* **Copy the Certificate ARN** — you will need to input this in `terraform.tfvars`.
 
 ---
 
-## Step 2: Create S3 Bucket
+## Step 1: Configure Environment Variables
 
-### Via AWS Console
+Navigate to the `terraform/` directory. You must supply your configuration values to Terraform via a `.tfvars` file.
 
-1. Go to **S3** → **Create bucket**
-2. Bucket name: `patient-docs-YOUR-ACCOUNT-ID` *(must be globally unique)*
-3. Region: `us-east-1` *(or your preferred region)*
-4. **Block all public access**: ✅ Enable all four options
-5. **Versioning**: Enable
-6. **Default encryption**:
-   - Encryption type: **SSE-KMS**
-   - KMS key: select the key you just created (`patient-app-s3-key`)
-   - ✅ **Bucket Key**: Enable *(reduces KMS API call costs)*
-7. Click **Create bucket**
+1. Create a `terraform.tfvars` file from scratch or by copying `terraform.tfvars.example`.
+2. Populate the file with the following variables:
 
-### Via AWS CLI
+```hcl
+project_name        = "patient-mngt"
+aws_region          = "us-east-1"
+domain_name         = "yourdomain.com"
+acm_certificate_arn = "arn:aws:acm:us-east-1:123456789012:certificate/xxxx-xxxx-xxxx"
 
-```bash
-ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-BUCKET_NAME="patient-docs-${ACCOUNT_ID}"
-REGION="us-east-1"
-KMS_KEY_ARN="arn:aws:kms:us-east-1:${ACCOUNT_ID}:key/YOUR-KEY-ID"
+# Database configuration
+database_name       = "patient_db"
+database_username   = "patient_app"
+database_password   = "UseAStrongSecretPassword123!" # Save this!
 
-# Create bucket
-aws s3api create-bucket \
-  --bucket ${BUCKET_NAME} \
-  --region ${REGION} \
-  --create-bucket-configuration LocationConstraint=${REGION}
+# Application JWT secret
+jwt_secret          = "generate-a-64-char-random-hex-string-for-security"
 
-# Block all public access
-aws s3api put-public-access-block \
-  --bucket ${BUCKET_NAME} \
-  --public-access-block-configuration \
-    "BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true"
-
-# Enable versioning
-aws s3api put-bucket-versioning \
-  --bucket ${BUCKET_NAME} \
-  --versioning-configuration Status=Enabled
-
-# Set default encryption (SSE-KMS)
-aws s3api put-bucket-encryption \
-  --bucket ${BUCKET_NAME} \
-  --server-side-encryption-configuration '{
-    "Rules": [{
-      "ApplyServerSideEncryptionByDefault": {
-        "SSEAlgorithm": "aws:kms",
-        "KMSMasterKeyID": "'${KMS_KEY_ARN}'"
-      },
-      "BucketKeyEnabled": true
-    }]
-  }'
-
-echo "Bucket created: ${BUCKET_NAME}"
+# Git repository configuration (backend EC2 clones this at boot)
+git_repo_url        = "https://github.com/rnld101/patient-mngt-v2.git"
+git_tag             = "v1.0.0"
 ```
 
 ---
 
-## Step 3: Create IAM Role for Backend EC2
+## Step 2: Initialize & Provision
 
-### 3a. Create the IAM role
+Run the following commands inside the `terraform/` directory:
 
+### 1. Initialize Terraform
+Downloads the required AWS and random providers, as well as community modules (VPC, Security Groups, RDS).
 ```bash
-# Create role with EC2 trust policy
-aws iam create-role \
-  --role-name PatientManagementAppRole \
-  --assume-role-policy-document '{
-    "Version": "2012-10-17",
-    "Statement": [{
-      "Effect": "Allow",
-      "Principal": {"Service": "ec2.amazonaws.com"},
-      "Action": "sts:AssumeRole"
-    }]
-  }'
+terraform init
 ```
 
-### 3b. Create and attach Policy 1 — Secrets Manager
-
+### 2. Validate Configuration
+Checks the code syntax and structure for validity.
 ```bash
-aws iam create-policy \
-  --policy-name PatientAppSecretsManagerPolicy \
-  --policy-document '{
-    "Version": "2012-10-17",
-    "Statement": [{
-      "Effect": "Allow",
-      "Action": ["secretsmanager:GetSecretValue"],
-      "Resource": "arn:aws:secretsmanager:us-east-1:ACCOUNT-ID:secret:patient-management-secrets*"
-    }]
-  }'
-
-aws iam attach-role-policy \
-  --role-name PatientManagementAppRole \
-  --policy-arn arn:aws:iam::ACCOUNT-ID:policy/PatientAppSecretsManagerPolicy
+terraform validate
 ```
 
-### 3c. Create and attach Policy 2 — S3
-
+### 3. Generate Execution Plan
+Previews the list of resources Terraform will create in your AWS account. Review this plan carefully.
 ```bash
-aws iam create-policy \
-  --policy-name PatientAppS3Policy \
-  --policy-document '{
-    "Version": "2012-10-17",
-    "Statement": [
-      {
-        "Effect": "Allow",
-        "Action": ["s3:PutObject", "s3:GetObject", "s3:DeleteObject"],
-        "Resource": "arn:aws:s3:::patient-docs-ACCOUNT-ID/*"
-      },
-      {
-        "Effect": "Allow",
-        "Action": ["s3:ListBucket"],
-        "Resource": "arn:aws:s3:::patient-docs-ACCOUNT-ID"
-      }
-    ]
-  }'
-
-aws iam attach-role-policy \
-  --role-name PatientManagementAppRole \
-  --policy-arn arn:aws:iam::ACCOUNT-ID:policy/PatientAppS3Policy
+terraform plan
 ```
 
-> **Note**: `s3:GetObject` is required for pre-signed URL generation (even on private buckets). `s3:DeleteObject` is required for document deletion.
-
-### 3d. Create and attach Policy 3 — KMS
-
+### 4. Apply Execution Plan
+Deploys the infrastructure. Type `yes` when prompted.
 ```bash
-aws iam create-policy \
-  --policy-name PatientAppKMSPolicy \
-  --policy-document '{
-    "Version": "2012-10-17",
-    "Statement": [{
-      "Effect": "Allow",
-      "Action": ["kms:Decrypt", "kms:GenerateDataKey", "kms:DescribeKey"],
-      "Resource": "arn:aws:kms:us-east-1:ACCOUNT-ID:key/YOUR-KEY-ID"
-    }]
-  }'
-
-aws iam attach-role-policy \
-  --role-name PatientManagementAppRole \
-  --policy-arn arn:aws:iam::ACCOUNT-ID:policy/PatientAppKMSPolicy
+terraform apply
 ```
-
-### 3e. Create instance profile (required for EC2)
-
-```bash
-aws iam create-instance-profile \
-  --instance-profile-name PatientManagementAppRole
-
-aws iam add-role-to-instance-profile \
-  --instance-profile-name PatientManagementAppRole \
-  --role-name PatientManagementAppRole
-```
-
-### 3f. Grant KMS role access to the key
-
-Go back to **KMS** → select your key → **Key policy** → Edit.
-
-Under `"Statement"`, add this block:
-
-```json
-{
-  "Sid": "AllowEC2RoleToUseKey",
-  "Effect": "Allow",
-  "Principal": {
-    "AWS": "arn:aws:iam::ACCOUNT-ID:role/PatientManagementAppRole"
-  },
-  "Action": ["kms:Decrypt", "kms:GenerateDataKey", "kms:DescribeKey"],
-  "Resource": "*"
-}
-```
+*Note: Provisioning takes about 10–15 minutes, primarily waiting for the RDS database instance to boot and the CloudFront distribution to deploy.*
 
 ---
 
-## Step 4: Create Secrets Manager Secret
+## Step 3: Inspect Outputs
 
-**Important**: Create this secret after you know the database private IP (from Part 1 of the deployment guide).
+Once `terraform apply` finishes successfully, the CLI will output several important variables:
 
-### Via Console
-
-1. Go to **Secrets Manager** → **Store a new secret**
-2. Secret type: **Other type of secret**
-3. Key/value pairs — enter these:
-
-| Key | Value |
+| Output | Description |
 |---|---|
-| `db_host` | Private IP of your database EC2 |
-| `db_name` | `patient_db` |
-| `db_user` | `patient_app` |
-| `db_password` | The password you set when creating MySQL user |
-| `jwt_secret` | A random 64-character string (see command below) |
-| `s3_bucket_name` | `patient-docs-YOUR-ACCOUNT-ID` |
-| `aws_region` | `us-east-1` |
-
-4. Secret name: `patient-management-secrets`
-5. Description: `Credentials for Patient Management Application`
-6. Rotation: **Disable** (for now)
-7. Click **Store**
-
-### Generate a strong JWT secret
-
-```bash
-# Generate a random 64-character JWT secret
-python3 -c "import secrets; print(secrets.token_hex(32))"
-# or
-openssl rand -hex 32
-```
-
-### Via AWS CLI
-
-```bash
-aws secretsmanager create-secret \
-  --name patient-management-secrets \
-  --description "Credentials for Patient Management Application" \
-  --secret-string '{
-    "db_host": "DB-PRIVATE-IP",
-    "db_name": "patient_db",
-    "db_user": "patient_app",
-    "db_password": "YOUR-DB-PASSWORD",
-    "jwt_secret": "YOUR-64-CHAR-RANDOM-STRING",
-    "s3_bucket_name": "patient-docs-YOUR-ACCOUNT-ID",
-    "aws_region": "us-east-1"
-  }'
-```
-
-### Verify the secret
-
-```bash
-aws secretsmanager get-secret-value \
-  --secret-id patient-management-secrets \
-  --query SecretString \
-  --output text
-```
+| `api_endpoint` | The Route53 endpoint for the Backend API (e.g. `https://api.yourdomain.com`) |
+| `frontend_endpoint` | The Route53 endpoint for the Frontend React App (e.g. `https://yourdomain.com`) |
+| `frontend_bucket_name` | The S3 bucket name created to host your static files |
+| `cloudfront_domain_name` | The CloudFront distribution URL (e.g. `d12345.cloudfront.net`) |
+| `rds_endpoint` | The private database endpoint (RDS instance) |
+| `secret_arn` | The ARN of the secret created in AWS Secrets Manager |
+| `kms_key_arn` | The ARN of the Customer Managed Key used for S3 encryption |
 
 ---
 
-## Step 5: Create Security Groups
+## Operational Notes (Rebuild Safety)
 
-Run these from AWS CLI (replace `VPC-ID` with your VPC ID):
+If you need to tear down the environment (`terraform destroy`) and rebuild it immediately:
 
-```bash
-VPC_ID="vpc-xxxxxxxxx"   # your default or custom VPC
-
-# ── Backend security group ──────────────────────────────
-aws ec2 create-security-group \
-  --group-name patient-app-backend-sg \
-  --description "Backend EC2 for Patient Management App" \
-  --vpc-id ${VPC_ID}
-
-BACKEND_SG_ID=$(aws ec2 describe-security-groups \
-  --filters Name=group-name,Values=patient-app-backend-sg \
-  --query 'SecurityGroups[0].GroupId' --output text)
-
-# Allow SSH from your IP
-aws ec2 authorize-security-group-ingress \
-  --group-id ${BACKEND_SG_ID} \
-  --protocol tcp --port 22 --cidr YOUR.IP.ADDRESS/32
-
-# Allow HTTP from anywhere
-aws ec2 authorize-security-group-ingress \
-  --group-id ${BACKEND_SG_ID} \
-  --protocol tcp --port 80 --cidr 0.0.0.0/0
-
-# ── Database security group ──────────────────────────────
-aws ec2 create-security-group \
-  --group-name patient-app-db-sg \
-  --description "Database EC2 for Patient Management App" \
-  --vpc-id ${VPC_ID}
-
-DB_SG_ID=$(aws ec2 describe-security-groups \
-  --filters Name=group-name,Values=patient-app-db-sg \
-  --query 'SecurityGroups[0].GroupId' --output text)
-
-# Allow SSH from your IP
-aws ec2 authorize-security-group-ingress \
-  --group-id ${DB_SG_ID} \
-  --protocol tcp --port 22 --cidr YOUR.IP.ADDRESS/32
-
-# Allow MySQL from backend security group only
-aws ec2 authorize-security-group-ingress \
-  --group-id ${DB_SG_ID} \
-  --protocol tcp --port 3306 \
-  --source-group ${BACKEND_SG_ID}
-
-# ── Frontend security group ──────────────────────────────
-aws ec2 create-security-group \
-  --group-name patient-app-frontend-sg \
-  --description "Frontend EC2 for Patient Management App" \
-  --vpc-id ${VPC_ID}
-
-FRONTEND_SG_ID=$(aws ec2 describe-security-groups \
-  --filters Name=group-name,Values=patient-app-frontend-sg \
-  --query 'SecurityGroups[0].GroupId' --output text)
-
-aws ec2 authorize-security-group-ingress \
-  --group-id ${FRONTEND_SG_ID} \
-  --protocol tcp --port 22 --cidr YOUR.IP.ADDRESS/32
-
-aws ec2 authorize-security-group-ingress \
-  --group-id ${FRONTEND_SG_ID} \
-  --protocol tcp --port 80 --cidr 0.0.0.0/0
-```
+* **S3 Deletion blocker**: S3 buckets cannot be deleted by AWS if they contain files. If you uploaded patient documents or built the frontend, `terraform destroy` will fail. Ensure buckets are empty or add `force_destroy = true` to the S3 bucket resources in `modules/s3/main.tf` and `modules/frontend/main.tf` before running destroy.
+* **Secrets Manager 7-Day Lock**: Running `terraform destroy` schedules the secret for deletion. Running `terraform apply` immediately after will fail with a name collision error. To bypass this, append a random suffix to the secret name or delete the secret permanently using the CLI before applying:
+  ```bash
+  aws secretsmanager delete-secret --secret-id patient-management-secrets --force-delete-without-recovery --region us-east-1
+  ```
 
 ---
 
-## Verify Everything
-
-```bash
-# Check secret exists and is readable
-aws secretsmanager get-secret-value \
-  --secret-id patient-management-secrets \
-  --query SecretString --output text
-
-# Check bucket exists and is private
-aws s3api get-public-access-block --bucket patient-docs-ACCOUNT-ID
-
-# Check bucket encryption
-aws s3api get-bucket-encryption --bucket patient-docs-ACCOUNT-ID
-
-# Check IAM role exists with policies
-aws iam list-attached-role-policies --role-name PatientManagementAppRole
-
-# List KMS keys
-aws kms list-aliases | grep patient
-```
-
----
-
-## Summary of Resources Created
-
-| Resource | Name / ID |
-|---|---|
-| KMS key | `alias/patient-app-s3-key` |
-| S3 bucket | `patient-docs-<account-id>` |
-| IAM role | `PatientManagementAppRole` |
-| IAM instance profile | `PatientManagementAppRole` |
-| IAM policies | `PatientAppSecretsManagerPolicy`, `PatientAppS3Policy`, `PatientAppKMSPolicy` |
-| Secret | `patient-management-secrets` |
-| Security groups | `patient-app-backend-sg`, `patient-app-db-sg`, `patient-app-frontend-sg` |
-
-All of the above are ready to be referenced in the deployment guide and later in Terraform.
-
----
-
-**Next step**: See `docs/deployment/DEPLOYMENT.md` to launch EC2 instances and deploy the application.
+**Next step**: See `docs/deployment/DEPLOYMENT.md` to build and upload your React application to the new S3 bucket.

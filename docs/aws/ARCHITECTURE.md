@@ -1,271 +1,240 @@
-# AWS Architecture Reference
+# AWS Production Architecture Reference
+
+This document describes the production architecture for the Patient Management System. The infrastructure is fully provisioned and managed using Terraform.
+
+## Overview
+
+The application is a secure patient and medical document management platform that enables healthcare professionals to manage patient information and securely store associated documents.
+
+To protect sensitive medical records and personal health information (PHI), the network is designed with strict segmentation. The frontend assets are served serverlessly via a Content Delivery Network (CDN), and the compute and database tiers are completely isolated in private subnets with no direct public internet ingress.
+
+---
 
 ## Architecture Diagram
 
-```
-                    ┌──────────────────────────────────┐
-                    │            Internet               │
-                    └──────────────┬───────────────────┘
-                                   │
-                    ┌──────────────▼───────────────────┐
-                    │       Frontend EC2 (Nginx)        │
-                    │         React SPA (Vite)          │
-                    │        t3.small — port 80         │
-                    └──────────────┬───────────────────┘
-                                   │ HTTP (Axios + JWT)
-                    ┌──────────────▼───────────────────┐
-                    │       Backend EC2 (Nginx)         │
-                    │  FastAPI + Gunicorn — port 8000   │
-                    │          t3.medium                │
-                    │   IAM Role: PatientAppRole        │
-                    └──────┬───────────┬───────────────┘
-                           │           │
-          ┌────────────────▼──┐   ┌────▼──────────────────────┐
-          │    Database EC2   │   │         AWS S3             │
-          │   MySQL 8.0       │   │   patient-documents/       │
-          │   t3.small:3306   │   │   Private — SSE-KMS        │
-          └───────────────────┘   └────────────────────────────┘
+```text
+                                         Users
+                                           │
+                                           ▼
+                                    ┌──────────────┐
+                                    │ AWS Route53  │
+                                    └──────┬───────┘
+                     ┌─────────────────────┴──────────────────────┐
+                     │ (lavenbloom.xyz)                           │ (api.lavenbloom.xyz)
+                     ▼ (HTTPS)                                    ▼ (HTTPS)
+           ┌──────────────────┐                         ┌──────────────────┐
+           │  AWS CloudFront  │                         │ Application Load │
+           │ CDN Distribution │                         │  Balancer (ALB)  │
+           └─────────┬────────┘                         └─────────┬────────┘
+                     │                                            │
+                     │ (Origin Access Control)                    │
+                     ▼                                            │
+           ┌──────────────────┐                                   │
+           │    AWS S3        │                                   │
+           │ Frontend Bucket  │                                   │
+           └──────────────────┘                                   │
+                                                                  │ (Forward to port 8000)
+    ┌─────────────────────────────────────────────────────────────┼────────────────────────────────────────────────────────┐
+    │ VPC (10.0.0.0/16)                                           │                                                        │
+    │                                                             ▼                                                        │
+    │   ┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────┐   │
+    │   │ Public Subnets (10.0.1.0/24 & 10.0.2.0/24)                                                                   │   │
+    │   │                                                                                                              │   │
+    │   │   [ NAT Gateway ] (Provides outbound internet access for private subnets during bootstrap)                   │   │
+    │   │                                                                                                              │   │
+    │   └─────────────────────────────────────────────────────────┬────────────────────────────────────────────────────┘   │
+    │                                                             │                                                        │
+    │   ┌─────────────────────────────────────────────────────────┼────────────────────────────────────────────────────┐   │
+    │   │ Private Subnets (10.0.11.0/24 & 10.0.12.0/24)           │                                                    │   │
+    │   │                                                         │                                                    │   │
+    │   │  ┌──────────────────────────────────────────────────────┼─────────────────────────────────────────────────┐  │   │
+    │   │  │ Auto Scaling Group (ASG)                             │                                                 │  │   │
+    │   │  │                                                      ▼                                                 │  │   │
+    │   │  │  ┌────────────────────────────────────────┐     ┌────────────────────────────────────────┐             │  │   │
+    │   │  │  │ Availability Zone A (us-east-1a)      │     │ Availability Zone B (us-east-1b)      │             │  │   │
+    │   │  │  │                                        │     │                                        │             │  │   │
+    │   │  │  │  [ Backend EC2 Instance ]              │     │  [ Backend EC2 Instance ]              │             │  │   │
+    │   │  │  │  FastAPI + Gunicorn (port 8000)        │     │  FastAPI + Gunicorn (port 8000)        │             │  │   │
+    │   │  │  │  No Public IP                          │     │  No Public IP                          │             │  │   │
+    │   │  │  └───────────────────┬────────────────────┘     └───────────────────┬────────────────────┘             │  │   │
+    │   │  └──────────────────────┼──────────────────────────────────────────────┼──────────────────────────────────┘  │   │
+    │   │                         │                                              │                                     │   │
+    │   │                         └──────────────────────┬───────────────────────┘                                     │   │
+    │   │                                                │                                                             │   │
+    │   │                                                ▼                                                             │   │
+    │   │                      ┌──────────────────────────────────────────────────┐                                    │   │
+    │   │                      │ VPC Endpoints                                    │                                    │   │
+    │   │                      │  - Interface: SSM, Secrets Manager               │                                    │   │
+    │   │                      │  - Gateway: S3 Gateway Endpoint                  │                                    │   │
+    │   │                      └─────────────────────────┬────────────────────────┘                                    │   │
+    │   └────────────────────────────────────────────────│─────────────────────────────────────────────────────────────┘   │
+    │                                                    │                                                                 │
+    │                                                    ▼ (Write/Read Objects)                                            │
+    │                                          ┌──────────────────┐                                                        │
+    │                                          │  AWS S3 Document │                                                        │
+    │                                          │  Storage Bucket  │                                                        │
+    │                                          └─────────┬────────┘                                                        │
+    │                                                    │                                                                 │
+    │                                                    ▼ (Server-Side Encryption)                                        │
+    │                                          ┌──────────────────┐                                                        │
+    │                                          │     AWS KMS      │                                                        │
+    │                                          │  (SSE-KMS Key)   │                                                        │
+    │                                          └──────────────────┘                                                        │
+    │                                                                                                                      │
+    │   ┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────┐   │
+    │   │ Database Subnets (10.0.21.0/24 & 10.0.22.0/24)                                                               │   │
+    │   │                                                                                                              │   │
+    │   │   [ Managed RDS MySQL Database Instance ] (db.t3.micro - Primary/Standby)                                    │   │
+    │   │   (Allowed Ingress: Port 3306 from Backend SG only)                                                          │   │
+    │   └──────────────────────────────────────────────────────────────────────────────────────────────────────────────┘   │
+    └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 
-  ┌──────────────────────────┐    ┌──────────────────────────┐
-  │   AWS Secrets Manager    │    │        AWS KMS            │
-  │  patient-management-     │    │  Customer-managed key     │
-  │  secrets                 │    │  (S3 encryption)         │
-  └──────────────────────────┘    └──────────────────────────┘
-
-  ┌──────────────────────────┐
-  │       IAM Role           │
-  │  PatientManagementAppRole│
-  │  Attached to backend EC2 │
-  └──────────────────────────┘
+                                           ┌──────────────────────────┐
+                                           │   AWS Secrets Manager    │
+                                           │ (Dynamic secret store -  │
+                                           │  loaded by app at boot)  │
+                                           └──────────────────────────┘
 ```
 
 ---
 
-## EC2 Instances
+## Compute & Host Sizing
 
-| Instance | Type | RAM | Storage | Role |
+| Tier | Resource | Type / Details | Storage | Role |
 |---|---|---|---|---|
-| Database | t3.small | 2 GB | 20 GB GP3 | MySQL 8.0 |
-| Backend | t3.medium | 4 GB | 30 GB GP3 | FastAPI + Gunicorn + Nginx |
-| Frontend | t3.small | 2 GB | 20 GB GP3 | React build served via Nginx |
-
-All instances run **Ubuntu 22.04 LTS**.
-
-The **backend instance** must have the `PatientManagementAppRole` IAM role attached.  
-The **database** and **frontend** instances require no IAM role.
+| **Database** | RDS Instance | `db.t3.micro` | 20 GB GP3 (Autoscaling to 50 GB) | Managed MySQL 8.4 engine |
+| **Backend** | EC2 Instances | `t3.micro` (ASG Min: 1, Max: 2) | 20 GB GP3 | FastAPI + Gunicorn |
+| **Frontend** | S3 + CloudFront | Serverless Static Site | N/A | React Build distribution |
 
 ---
 
-## AWS Secrets Manager
+## Network Architecture & Subnets
 
-**Secret name**: `patient-management-secrets`
+The network is built inside a custom VPC with a CIDR block of `10.0.0.0/16` and spans two Availability Zones (`us-east-1a` and `us-east-1b`).
 
-```json
-{
-  "db_host":       "10.0.x.x",
-  "db_name":       "patient_db",
-  "db_user":       "patient_app",
-  "db_password":   "<strong-password>",
-  "jwt_secret":    "<random-64-char-string>",
-  "s3_bucket_name": "patient-docs-<account-id>",
-  "aws_region":    "us-east-1"
-}
-```
+### Subnet Allocation
+1. **Public Subnets** (`10.0.1.0/24` and `10.0.2.0/24`):
+   * Host the public Application Load Balancer (ALB).
+   * Host the NAT Gateway for outbound traffic from the private subnets.
+2. **Private Subnets** (`10.0.11.0/24` and `10.0.12.0/24`):
+   * Host the Backend EC2 instances in an Auto Scaling Group.
+   * Do not assign public IP addresses to instances.
+3. **Database Subnets** (`10.0.21.0/24` and `10.0.22.0/24`):
+   * Host the managed RDS MySQL database instance.
+   * Completely isolated; database is unreachable from outside the VPC.
 
-The backend loads this secret **at startup** via `boto3`. No credentials are stored in code or environment files.
-
----
-
-## S3 Bucket
-
-| Setting | Value |
-|---|---|
-| Name | `patient-docs-<account-id>` |
-| Region | us-east-1 (or your chosen region) |
-| Public access | ❌ Blocked completely |
-| Encryption | SSE-KMS (customer-managed key) |
-| Versioning | Enabled (recommended) |
-| Object prefix | `patient_documents/<uuid>.<ext>` |
-
-Documents are **never served from a public URL**. The backend generates a **pre-signed URL** valid for 1 hour on demand.
+### VPC Endpoints
+To keep application communications inside the private network boundary and avoid NAT Gateway data costs for AWS API requests:
+* **Interface VPC Endpoints**: Deployed in private subnets for Systems Manager (`ssm`, `ssmmessages`), EC2 Messages (`ec2messages`), and Secrets Manager (`secretsmanager`).
+* **Gateway VPC Endpoint**: Deployed inside the VPC route tables for Amazon S3 (`s3`), allowing high-bandwidth, direct private access to the S3 Document Storage Bucket.
 
 ---
 
-## IAM Role: `PatientManagementAppRole`
+## AWS Services Detail
 
-Attach this role to the **backend EC2 instance profile**.
+### Route53
+* **Purpose**: Manages public DNS records.
+* **Benefit**: Acts as the initial entry point. Resolves requests for the apex domain (`lavenbloom.xyz`) to the CloudFront distribution, and the API subdomain (`api.lavenbloom.xyz`) to the ALB.
 
-### Policy 1 — Secrets Manager
+### CloudFront & S3 Frontend
+* **Purpose**: Hosts static React single page application (SPA) files in a private S3 bucket and serves them globally.
+* **Benefit**: Using Origin Access Control (OAC) prevents users from downloading files directly from S3. CloudFront caches assets at edge locations, while custom error rules rewrite 403 and 404 responses to `index.html` to support client-side React Router navigation.
 
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [{
-    "Effect": "Allow",
-    "Action": ["secretsmanager:GetSecretValue"],
-    "Resource": "arn:aws:secretsmanager:us-east-1:ACCOUNT-ID:secret:patient-management-secrets*"
-  }]
-}
-```
+### Application Load Balancer (ALB)
+* **Purpose**: Acts as the single entry point for API traffic, routing requests to the Auto Scaling Group.
+* **Benefit**: Terminates HTTPS/TLS traffic using certificates managed in ACM. Routes traffic to port 8000 on backend nodes and performs active health checking on the `/health` endpoint.
 
-### Policy 2 — S3
+### Auto Scaling Group (ASG) & Launch Templates
+* **Purpose**: Dynamically provisions backend EC2 instances based on CPU utilization and health metrics.
+* **Benefit**: Automates fault tolerance. Launch templates define the standard configuration and execute user-data bootstrap scripts to pull code, set up virtual environments, configure systemd, and launch Gunicorn.
 
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": ["s3:PutObject", "s3:GetObject", "s3:DeleteObject"],
-      "Resource": "arn:aws:s3:::patient-docs-ACCOUNT-ID/*"
-    },
-    {
-      "Effect": "Allow",
-      "Action": ["s3:ListBucket"],
-      "Resource": "arn:aws:s3:::patient-docs-ACCOUNT-ID"
-    }
-  ]
-}
-```
+### AWS Relational Database Service (RDS)
+* **Purpose**: Deploys a managed MySQL 8.4 database inside the isolated database subnets.
+* **Benefit**: Offloads database patching, backups, and scalability. Multi-AZ replication (optional) provides high availability.
 
-> **Important**: `s3:GetObject` is required for pre-signed URL generation even on private buckets.  
-> `s3:DeleteObject` is required for document deletion.
+### AWS Secrets Manager
+* **Purpose**: Securely stores application secrets (`db_host`, `db_name`, `db_user`, `db_password`, `jwt_secret`, `s3_bucket_name`, `aws_region`).
+* **Benefit**: Prevents hardcoded credentials in the repository. The backend queries Secrets Manager during startup via `boto3` and loads the credentials strictly in-memory.
 
-### Policy 3 — KMS
+### AWS KMS
+* **Purpose**: Manages a Customer Managed Key (CMK) alias `patient-app-s3-key`.
+* **Benefit**: Enforces Server-Side Encryption (SSE-KMS) on all files uploaded to the patient document S3 bucket. All cryptographic operations are handled transparently by S3.
 
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [{
-    "Effect": "Allow",
-    "Action": ["kms:Decrypt", "kms:GenerateDataKey", "kms:DescribeKey"],
-    "Resource": "arn:aws:kms:us-east-1:ACCOUNT-ID:key/KEY-ID"
-  }]
-}
-```
+### IAM Roles & Instance Profiles
+* **Purpose**: Attaches the `PatientManagementAppRole` to the backend instances.
+* **Benefit**: Allows the backend instances to read from Secrets Manager, write/read from S3, and use the KMS key without needing static AWS access keys.
 
 ---
 
-## Security Groups
+## Security Group Matrix
 
-### `patient-app-backend-sg` (Backend EC2)
-
-| Direction | Port | Protocol | Source | Purpose |
-|---|---|---|---|---|
-| Inbound | 22 | TCP | Your IP only | SSH |
-| Inbound | 80 | TCP | 0.0.0.0/0 | HTTP (Nginx) |
-| Inbound | 443 | TCP | 0.0.0.0/0 | HTTPS (optional) |
-| Outbound | All | All | 0.0.0.0/0 | Allow all outbound |
-
-> Port 8000 (Gunicorn) should **not** be publicly exposed. Nginx proxies from 80 → 8000 locally.
-
-### `patient-app-db-sg` (Database EC2)
-
-| Direction | Port | Protocol | Source | Purpose |
-|---|---|---|---|---|
-| Inbound | 22 | TCP | Your IP only | SSH |
-| Inbound | 3306 | TCP | patient-app-backend-sg | MySQL from backend only |
-| Outbound | All | All | 0.0.0.0/0 | Allow all outbound |
-
-### `patient-app-frontend-sg` (Frontend EC2)
-
-| Direction | Port | Protocol | Source | Purpose |
-|---|---|---|---|---|
-| Inbound | 22 | TCP | Your IP only | SSH |
-| Inbound | 80 | TCP | 0.0.0.0/0 | HTTP |
-| Inbound | 443 | TCP | 0.0.0.0/0 | HTTPS (optional) |
-| Outbound | All | All | 0.0.0.0/0 | Allow all outbound |
+| Security Group | Inbound Rules | Outbound Rules | Purpose |
+|---|---|---|---|
+| **ALB SG** | Ports `80` & `443` from `0.0.0.0/0` | Port `8000` to Backend SG | Public HTTP/HTTPS ingress and routing to backend |
+| **Backend SG** | Port `8000` from ALB SG | All traffic (`0.0.0.0/0`) | Computes API requests; permits updates/git cloning |
+| **RDS SG** | Port `3306` from Backend SG | None | Strict database protection |
+| **VPC Endpoint SG** | Port `443` from VPC CIDR (`10.0.0.0/16`) | All traffic (`0.0.0.0/0`) | Secure connection to AWS API endpoints |
 
 ---
 
 ## Data Flows
 
-### Application Startup
-```
+### 1. Application Startup
+```text
 Backend EC2 boots
-  → boto3 calls Secrets Manager (via IAM role — no keys needed)
-  → Secrets loaded into settings (DB URL, JWT secret, bucket name)
-  → SQLAlchemy connects to MySQL
-  → Tables created if not exist (including patient_documents)
-  → App ready to serve
+  → Executes user-data scripts to configure environment
+  → Systemd starts FastAPI via Gunicorn binding to port 8000
+  → Application requests 'patient-management-secrets' from Secrets Manager via VPC Interface Endpoint
+  → Secrets returned and loaded in-memory (DB host, password, JWT key)
+  → SQLAlchemy connects to RDS MySQL
+  → Database tables created if they do not exist
+  → App is healthy and registers as online with the ALB target group
 ```
 
-### Patient Document Upload
-```
-User selects file + document type in browser
-  → POST /api/patients/{id}/documents (multipart/form-data)
-  → Backend validates: JWT token, patient ownership, file type, file size
-  → boto3.upload_fileobj → S3 (SSE-KMS encrypts automatically)
-  → S3 key stored in patient_documents table
-  → DocumentResponse returned (no S3 URL — key only)
-```
-
-### Document View (Pre-signed URL)
-```
-User clicks "View" on a document
-  → GET /api/patients/{id}/documents/{doc_id}/url
-  → Backend validates ownership
-  → boto3.generate_presigned_url → temporary URL (1 hour TTL)
-  → Frontend opens URL in new tab
-  → Browser fetches file directly from S3 (URL expires after 1 hr)
+### 2. General API Request
+```text
+User Browser makes API call (HTTPS)
+  → Route53 DNS resolves to ALB
+  → ALB terminates SSL, validates target group health
+  → ALB forwards HTTP request to a private Backend EC2 instance on port 8000
+  → Backend authenticates request via JWT token
+  → Backend queries RDS MySQL on port 3306
+  → RDS returns SQL dataset
+  → Backend compiles response and returns it via ALB to the Browser
 ```
 
-### Document Delete
+### 3. Patient Document Upload
+```text
+User uploads diagnostic file in Browser
+  → POST request sent to ALB → Backend EC2 instance
+  → Backend validates JWT token and validates file constraints (type, size)
+  → Backend calls S3 API via S3 Gateway Endpoint (inside VPC) to upload the file
+  → S3 receives object, and S3 handles Server-Side Encryption using the Customer-Managed Key (SSE-KMS)
+  → S3 key ('patient_documents/<uuid>.<ext>') is returned
+  → Backend records S3 key index in RDS MySQL table 'patient_documents'
+  → Response 201 Created sent to client
 ```
-User clicks "Delete"
-  → DELETE /api/patients/{id}/documents/{doc_id}
-  → DB record deleted first
-  → boto3.delete_object → S3 file deleted
-  → 204 No Content returned
+
+### 4. Patient Document Access (Pre-signed URL)
+```text
+User requests to view diagnostic file in Browser
+  → GET request sent to /api/patients/{id}/documents/{doc_id}/url
+  → Backend authenticates user and verifies they own the patient record
+  → Backend uses boto3 to generate an S3 pre-signed URL (1-hour TTL)
+  → URL is returned to Browser
+  → Browser opens URL in a new tab, loading file directly from S3
+  → S3 verifies signature and handles decryption via KMS Server-Side Encryption (SSE-KMS) before streaming to Browser
 ```
 
----
-
-## KMS Encryption
-
-S3 encryption is handled entirely by AWS — the application code does not deal with KMS key IDs.
-
-When a file is uploaded:
-1. S3 receives the object
-2. S3 checks the bucket's **default encryption** setting (SSE-KMS)
-3. S3 calls KMS to generate a data key
-4. S3 encrypts the object with that key
-5. Only principals with `kms:Decrypt` + `kms:GenerateDataKey` can access the object
-
-The backend EC2's IAM role has these KMS permissions, which is why pre-signed URLs and direct reads work.
-
----
-
-## Cost Estimate (Monthly)
-
-| Service | Details | Est. Cost |
-|---|---|---|
-| EC2 (3 instances) | 2× t3.small + 1× t3.medium | ~$28 |
-| EBS Storage | 70 GB GP3 total | ~$6 |
-| Secrets Manager | 1 secret | $0.40 |
-| S3 Storage | 10 GB documents | ~$0.23 |
-| S3 Requests | PutObject + GetObject + presigned | ~$0.10 |
-| KMS | 1 key + API calls | ~$1.50 |
-| Data Transfer | 5 GB outbound | ~$0.45 |
-| **Total** | | **~$37/month** |
-
----
-
-## Security Checklist
-
-- [x] No hardcoded credentials anywhere in code
-- [x] IAM role instead of access keys on EC2
-- [x] S3 bucket public access fully blocked
-- [x] Documents accessed only via pre-signed URLs
-- [x] KMS encryption on all S3 objects
-- [x] JWT authentication on all patient/document endpoints
-- [x] Per-user data isolation enforced in all queries
-- [x] bcrypt password hashing (12 rounds)
-- [x] Input validation on all endpoints (Pydantic)
-- [ ] HTTPS / TLS via Certbot (recommended for production)
-- [ ] VPC Flow Logs
-- [ ] CloudTrail enabled
-- [ ] GuardDuty enabled
+### 5. Patient Document Deletion
+```text
+User clicks delete on a file in Browser
+  → DELETE request sent to /api/patients/{id}/documents/{doc_id}
+  → Backend verifies JWT and patient ownership
+  → Backend deletes index row from MySQL table 'patient_documents'
+  → Backend calls S3 API to delete the object from the bucket
+  → Response 204 No Content returned
+```
 
 ---
 

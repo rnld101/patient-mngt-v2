@@ -3,7 +3,7 @@
 All examples assume:
 
 ```bash
-BASE="http://localhost:8000"   # or your backend public IP
+BASE="http://localhost:8000"   # or your API custom domain (e.g., https://api.yourdomain.com)
 ```
 
 ---

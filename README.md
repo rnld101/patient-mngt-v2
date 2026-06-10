@@ -2,7 +2,7 @@
 
 A full-stack web application for managing patient records with secure medical document storage.
 
-Built with **FastAPI** (Python) + **React** (Vite/Tailwind) + **MySQL** + **AWS** (S3, KMS, Secrets Manager).
+Built with **FastAPI** (Python) + **React** (Vite/Tailwind) + **AWS RDS MySQL** + **AWS S3 / CloudFront** + **Terraform**.
 
 ---
 
@@ -56,12 +56,12 @@ patient-mngt-v2/
 │   │   │   ├── PatientsPage.jsx
 │   │   │   ├── AddPatientPage.jsx
 │   │   │   ├── EditPatientPage.jsx
-│   │   │   └── PatientDocumentsPage.jsx   # NEW
+│   │   │   └── PatientDocumentsPage.jsx
 │   │   ├── services/
 │   │   │   ├── api.js            # Axios instance + auth interceptor
 │   │   │   ├── authService.js    # Login/register calls
 │   │   │   ├── patientService.js # Patient API calls
-│   │   │   └── documentService.js # Document API calls — NEW
+│   │   │   └── documentService.js # Document API calls
 │   │   ├── context/AuthContext.jsx
 │   │   ├── routes/PrivateRoute.jsx
 │   │   ├── utils/errorHandler.js
@@ -69,13 +69,28 @@ patient-mngt-v2/
 │   ├── package.json
 │   └── .env.example
 │
+├── terraform/                   # Infrastructure as Code (IaC)
+│   ├── modules/                 # Modular AWS sub-components
+│   │   ├── vpc/                 # Multi-tier network
+│   │   ├── asg/                 # Autoscaling & Application Load Balancer
+│   │   ├── rds/                 # Managed MySQL DB
+│   │   ├── frontend/            # S3 + CloudFront CDN + OAC
+│   │   ├── iam/                 # Instance profiles & least privilege
+│   │   ├── kms/                 # Key management for S3 SSE
+│   │   ├── secrets/             # Dynamic secret store
+│   │   ├── dns/                 # Route53 record binding
+│   │   └── security-groups/     # Layered security groups
+│   ├── main.tf                  # Main orchestrator
+│   ├── variables.tf             # Inputs
+│   ├── outputs.tf               # Outputs
+│   └── terraform.tfvars         # Environment settings
+│
 └── docs/
-    ├── README.md                 # This file
     ├── aws/
-    │   ├── AWS_SETUP.md          # AWS infrastructure setup guide
+    │   ├── AWS_SETUP.md          # AWS setup & prerequisites
     │   └── ARCHITECTURE.md       # Architecture reference
     └── deployment/
-        └── DEPLOYMENT.md         # Step-by-step EC2 deployment guide
+        └── DEPLOYMENT.md         # Automated deployment guide
 ```
 
 ---
@@ -152,13 +167,19 @@ GET  /          API info + docs link
 
 ## AWS Services
 
-| Service | Purpose |
-|---|---|
-| EC2 | Compute for backend, frontend, database |
-| S3 | Private document storage (`patient_documents/` prefix) |
-| KMS | Server-side encryption for S3 objects (SSE-KMS) |
-| Secrets Manager | Stores DB credentials, JWT secret, bucket name |
-| IAM | EC2 instance role — no access keys in code |
+| Service | Purpose | Benefit |
+|---|---|---|
+| **VPC** | Custom network segmentation | Isolates tiers into public, private, database subnets |
+| **Route53** | Public DNS management | Resolves domains and points to ALB / CloudFront |
+| **CloudFront** | Global Content Delivery Network (CDN) | Distributes static frontend React assets; secures bucket access |
+| **S3** | Storage for frontend build and patient docs | Secure, serverless, durable, low-cost file store |
+| **ALB** | Public Application Load Balancer | Performs SSL termination and routes to private backend hosts |
+| **ASG** | Auto Scaling Group (EC2 nodes) | Handles backend FastAPI workloads with high availability |
+| **RDS** | Managed AWS MySQL Database | Multi-AZ database engines; eliminates patching/backup overhead |
+| **KMS** | Key Management Service | Centralized key controls for S3 SSE-KMS encryption |
+| **Secrets Manager** | Application runtime secrets | Secures database credentials and JWT keys without local disk files |
+| **IAM** | Least-privilege roles & instance profiles | Grants EC2 instances API access without hardcoded credentials |
+| **VPC Endpoints** | Private interface & gateway endpoints | Keeps system traffic (SSM, S3, Secrets Manager) off public internet |
 
 ---
 
@@ -166,10 +187,11 @@ GET  /          API info + docs link
 
 - Passwords hashed with **bcrypt** (12 rounds)
 - All API routes protected with **JWT Bearer tokens**
-- S3 bucket is **fully private** — documents accessed only via backend-generated **pre-signed URLs** (1-hour expiry)
+- Document S3 bucket is **fully private** — documents accessed only via backend-generated **pre-signed URLs** (1-hour expiry)
 - AWS credentials via **IAM instance role** — nothing hardcoded
 - Secrets loaded from **AWS Secrets Manager** at startup
 - Per-user data isolation — all queries enforce `user_id` ownership
+- Network-level protection: compute nodes and database reside in private subnets with strict security groups
 
 ---
 
@@ -179,11 +201,11 @@ GET  /          API info + docs link
 |---|---|
 | Backend | Python, FastAPI, SQLAlchemy 2.0, Pydantic v2 |
 | Auth | JWT (python-jose), bcrypt (pwdlib) |
-| Database | MySQL 8 |
+| Database | Managed RDS MySQL 8.4 |
 | Frontend | React 18, Vite 5, Tailwind CSS 3, Axios |
 | Routing | React Router v6 |
-| Cloud | AWS (EC2, S3, KMS, Secrets Manager, IAM) |
-| Server | Gunicorn + Uvicorn workers, Nginx |
+| Cloud | AWS (VPC, Route53, CloudFront, ALB, ASG, S3, RDS, Secrets Manager, KMS, IAM) |
+| IaC | Terraform (~> 1.5) |
 
 ---
 
@@ -219,6 +241,6 @@ API docs: `http://localhost:8000/docs`
 
 | Document | Purpose |
 |---|---|
-| `docs/aws/AWS_SETUP.md` | Create S3, KMS, Secrets Manager, IAM role |
-| `docs/aws/ARCHITECTURE.md` | Architecture diagrams, data flows, security details |
-| `docs/deployment/DEPLOYMENT.md` | Step-by-step EC2 deployment with verification |
+| [`docs/aws/AWS_SETUP.md`](file:///c:/Users/RAPHEL%20M%20L/Desktop/patient-mngt-v2/docs/aws/AWS_SETUP.md) | AWS prerequisites (Route53 zone, ACM wildcard certificate) and Terraform execution |
+| [`docs/aws/ARCHITECTURE.md`](file:///c:/Users/RAPHEL%20M%20L/Desktop/patient-mngt-v2/docs/aws/ARCHITECTURE.md) | Terraform production network layout, data flows, and security boundaries |
+| [`docs/deployment/DEPLOYMENT.md`](file:///c:/Users/RAPHEL%20M%20L/Desktop/patient-mngt-v2/docs/deployment/DEPLOYMENT.md) | Step-by-step automated deployment, frontend build & sync, and health checking |
